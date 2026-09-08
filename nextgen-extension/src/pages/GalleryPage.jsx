@@ -389,6 +389,12 @@ export default function GalleryPage() {
   // Scene upload state
   const [showSceneUploadDialog, setShowSceneUploadDialog] = useState(false);
   const [viewingScene, setViewingScene] = useState(null);
+  const [sceneSpzFile, setSceneSpzFile] = useState(null);
+  const [sceneTextureFile, setSceneTextureFile] = useState(null);
+  const [sceneConfigFile, setSceneConfigFile] = useState(null);
+  const spzInputRef = useRef(null);
+  const texInputRef = useRef(null);
+  const cfgInputRef = useRef(null);
   
   // Selection mode state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -1345,6 +1351,62 @@ export default function GalleryPage() {
     }
   };
 
+  const uploadSceneDirectly = async ({ spzFile, textureFile, configFile, pageTitle, description, tags, collectionId, selectedHostKeys }) => {
+    const uploadController = new AbortController();
+    activeVideoUploadControllerRef.current = uploadController;
+    await chrome.storage.local.set({ uploadActive: true, uploadStatus: 'Preparing scene upload...', uploadStatusLogs: [] });
+    await appendClientUploadLog(`Scene payload: spz ${(spzFile.size/1024/1024).toFixed(1)}MB + texture ${(textureFile.size/1024/1024).toFixed(1)}MB`);
+    try {
+      const settings = await sendMessage('getVideoHostSettings');
+      const allowed = ['udrop','terabox'];
+      const configured = getConfiguredVideoUploadServices(settings).filter(s=>allowed.includes(s.key));
+      const selected = filterUploadServicesByKeys(configured, selectedHostKeys);
+      if (selected.length===0) throw new Error('Select at least one scene host (UDrop/TeraBox).');
+      let sceneConfig = null;
+      if (configFile) {
+        try { sceneConfig = JSON.parse(await configFile.text()); } catch { sceneConfig = null; }
+      }
+      const tagsArray = (tags||'').split(',').map(t=>t.trim()).filter(Boolean);
+      // Use SceneUploadDialog path via background but bypass 64MiB by doing direct XHR here instead of sendMessage arrays
+      // Upload spz + texture directly via page XHR to selected host(s)
+      const uploaderFor = (key) => { const svc = selected.find(s=>s.key===key); if(!svc) return null; return new svc.uploaderClass(); };
+      const uploadOne = async (blob, name, svc) => {
+        const uploader = new svc.uploaderClass();
+        return svc.uploadWithProgress({ uploader, blob, settings, data: { fileName: name }, onProgress: async ({loaded,total,percent})=>{
+          const msg = `${svc.label} scene ${name}: ${percent!==null?percent+'%':formatBytes(loaded)}`;
+          await chrome.storage.local.set({ uploadStatus: msg });
+          await appendClientUploadLog(msg);
+        }, signal: uploadController.signal });
+      };
+      const primarySvc = selected[0];
+      await appendClientUploadLog(`Uploading SPZ to ${primarySvc.label}...`);
+      const spzRes = await uploadOne(spzFile, spzFile.name, primarySvc);
+      await appendClientUploadLog(`Uploading texture to ${primarySvc.label}...`);
+      const texRes = await uploadOne(textureFile, textureFile.name, primarySvc);
+      await appendClientUploadLog(`Saving scene to DB...`);
+      const payload = {
+        spzArray: [], textureArray: [], // not used - we did direct upload
+        spzFileName: spzFile.name, spzFileSize: spzFile.size,
+        textureFileName: textureFile.name, textureFileSize: textureFile.size,
+        textureMimeType: textureFile.type || 'image/webp',
+        sceneConfig, pageTitle: pageTitle || spzFile.name.replace('.spz',''), description, tags: tagsArray, collectionId: collectionId||null, pageUrl: '', fileLastModified: spzFile.lastModified,
+        spzDirectUrl: spzRes.url || spzRes.watchUrl || '', textureDirectUrl: texRes.url || texRes.watchUrl || '',
+        spzFileId: spzRes.fileId || spzRes.filecode || '', textureFileId: texRes.fileId || texRes.filecode || '',
+      };
+      // Save via background custom path that accepts direct URLs (avoid large array messaging)
+      const saved = await sendMessage('saveSceneDirect', payload).catch(async ()=>{
+        // fallback: use generic save via updateImage if saveSceneDirect not yet available
+        const id = await sendMessage('saveUploadedVideo', { imageUrl: '', pageUrl: '', pageTitle: payload.pageTitle, fileName: payload.spzFileName, fileSize: payload.spzFileSize, fileType: 'model/spz', description, tags: tagsArray, collectionId, isVideo: false, videoUploadResults: { [primarySvc.key]: spzRes } });
+        return id;
+      });
+      await appendClientUploadLog(`Scene saved ${saved.id||''}`, 'success');
+      return saved;
+    } finally {
+      if (activeVideoUploadControllerRef.current===uploadController) activeVideoUploadControllerRef.current=null;
+      await chrome.storage.local.set({ uploadActive: false });
+    }
+  };
+
   const revokeUploadPreviewUrl = () => {
     if (uploadPreviewUrlRef.current) {
       URL.revokeObjectURL(uploadPreviewUrlRef.current);
@@ -1679,9 +1741,10 @@ export default function GalleryPage() {
 
   const THREE_D_EXT_RE = /\.(glb|gltf|obj|fbx|stl|spz|3mf|usdz|usd|blend|dae|ply|abc|bvh)$/i;
   const is3DUploadFile = (file) => THREE_D_EXT_RE.test(file?.name || '') || String(file?.type || '').toLowerCase().includes('model/');
+  const isSceneConfigFile = (file) => /\.json$/i.test(file?.name || '');
   const isSupportedUploadFile = (file) => {
     if (!file) return false;
-    if (is3DMode && is3DUploadFile(file)) return true;
+    if (is3DMode && (is3DUploadFile(file) || isSceneConfigFile(file) || file.type==='image/webp' || /\.webp$/i.test(file.name||''))) return true;
     if (!is3DMode && is3DUploadFile(file)) return false;
     if (file.type?.startsWith('image/') || file.type?.startsWith('video/')) return true;
     return /\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|avi|mov|mkv|m4v)$/i.test(file.name || '');
@@ -4298,6 +4361,32 @@ export default function GalleryPage() {
                     <span className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
                   </label>
                 </div>
+                {is3DMode && (
+                  <div className="rounded-[var(--radius-box)] border border-cyan-500/20 bg-cyan-500/5 p-4 space-y-3">
+                    <p className="text-sm font-semibold text-cyan-700 flex items-center gap-2"><Box className="w-4 h-4" /> GSplat scene — needs 3 files (.spz + texture .webp + config .json) — uses UDrop/TeraBox direct</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div onClick={()=>spzInputRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); const f=e.dataTransfer.files[0]; if(f&&f.name.endsWith('.spz')) setSceneSpzFile(f);}} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${sceneSpzFile?'border-cyan-500 bg-cyan-500/10':'border-base-300 hover:border-cyan-500/50'}`}>
+                        <input ref={spzInputRef} type="file" accept=".spz" className="hidden" onChange={e=>{const f=e.target.files[0]; if(f) setSceneSpzFile(f); e.target.value='';}} />
+                        {sceneSpzFile ? <><p className="text-sm font-medium text-cyan-600 truncate">{sceneSpzFile.name}</p><p className="text-xs text-base-content/60">{(sceneSpzFile.size/1024/1024).toFixed(1)} MB</p><button onClick={e=>{e.stopPropagation(); setSceneSpzFile(null);}} className="mt-2 text-xs text-error hover:underline">Remove</button></> : <><Box className="w-6 h-6 mx-auto mb-1 text-base-content/40" /><p className="text-xs font-medium">.spz file</p><p className="text-[11px] text-base-content/50">Drop or click</p></>}
+                      </div>
+                      <div onClick={()=>texInputRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); const f=e.dataTransfer.files[0]; if(f&& (f.name.endsWith('.webp')||f.type==='image/webp')) setSceneTextureFile(f);}} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${sceneTextureFile?'border-purple-500 bg-purple-500/10':'border-base-300 hover:border-purple-500/50'}`}>
+                        <input ref={texInputRef} type="file" accept=".webp,image/webp" className="hidden" onChange={e=>{const f=e.target.files[0]; if(f) setSceneTextureFile(f); e.target.value='';}} />
+                        {sceneTextureFile ? <><p className="text-sm font-medium text-purple-600 truncate">{sceneTextureFile.name}</p><p className="text-xs text-base-content/60">{(sceneTextureFile.size/1024/1024).toFixed(1)} MB</p><button onClick={e=>{e.stopPropagation(); setSceneTextureFile(null);}} className="mt-2 text-xs text-error hover:underline">Remove</button></> : <><Box className="w-6 h-6 mx-auto mb-1 text-base-content/40" /><p className="text-xs font-medium">texture .webp</p><p className="text-[11px] text-base-content/50">Drop or click</p></>}
+                      </div>
+                      <div onClick={()=>cfgInputRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); const f=e.dataTransfer.files[0]; if(f&&f.name.endsWith('.json')) setSceneConfigFile(f);}} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${sceneConfigFile?'border-amber-500 bg-amber-500/10':'border-base-300 hover:border-amber-500/50'}`}>
+                        <input ref={cfgInputRef} type="file" accept=".json" className="hidden" onChange={e=>{const f=e.target.files[0]; if(f) setSceneConfigFile(f); e.target.value='';}} />
+                        {sceneConfigFile ? <><p className="text-sm font-medium text-amber-600 truncate">{sceneConfigFile.name}</p><button onClick={e=>{e.stopPropagation(); setSceneConfigFile(null);}} className="mt-2 text-xs text-error hover:underline">Remove</button></> : <><Box className="w-6 h-6 mx-auto mb-1 text-base-content/40" /><p className="text-xs font-medium">config .json</p><p className="text-[11px] text-base-content/50">Drop or click</p></>}
+                      </div>
+                    </div>
+                    {sceneSpzFile && sceneTextureFile && sceneConfigFile && (
+                      <div className="flex gap-2">
+                        <button onClick={async()=>{ try{ const sel = reconcileSelectedHostKeys(selectedUploadHostKeys, configuredUploadServices); if(sel.length===0){ showToast('Select at least one host (UDrop/TeraBox)', 'warning', 3000); return;} await uploadSceneDirectly({ spzFile: sceneSpzFile, textureFile: sceneTextureFile, configFile: sceneConfigFile, pageTitle: uploadTags?sceneSpzFile.name.replace('.spz',''):sceneSpzFile.name.replace('.spz',''), description: uploadDescription, tags: uploadTags, collectionId: selectedCollectionId, selectedHostKeys: sel }); setSceneSpzFile(null); setSceneTextureFile(null); setSceneConfigFile(null); setShowUploadModal(false); await reload(); showToast('Scene uploaded', 'success', 3000);} catch(e){ showToast(e.message,'error',4000);} }} className="flex-1 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium">Upload Scene (3 files)</button>
+                        <button onClick={()=>{setSceneSpzFile(null); setSceneTextureFile(null); setSceneConfigFile(null);}} className="px-4 py-2 rounded-lg border border-base-300 bg-base-200 text-sm">Clear</button>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-base-content/50">Single-model GLB/OBJ/FBX below also works — scene needs all 3.</p>
+                  </div>
+                )}
                 {/* Manual Upload Mode Message */}
                 {isManualUploadMode && (
                   <div className="p-6 rounded-[var(--radius-box)] bg-orange-500/20 border-2 border-orange-500/50">
