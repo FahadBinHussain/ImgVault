@@ -4400,34 +4400,55 @@ export default function GalleryPage() {
                   </div>
                 )}
                 
-                <label className="block">
-                  <div className="flex items-center justify-center w-full min-h-[calc(100vh-16rem)] px-4 transition 
-                                bg-base-200 border-2 border-dashed border-base-300 rounded-[var(--radius-box)] 
-                                hover:border-primary hover:bg-base-300/60 cursor-pointer
-                                group">
-                    <div className="text-center">
-                      <motion.div animate={{ y: is3DMode ? [0, -4, 0] : 0 }} transition={{ duration: 1.6, repeat: is3DMode ? Infinity : 0, ease: 'easeInOut' }}>
-                        {is3DMode ? <Box className="w-16 h-16 mx-auto text-cyan-500 mb-4" /> : <Upload className="w-16 h-16 mx-auto text-base-content/40 group-hover:text-primary transition-colors mb-4" />}
-                      </motion.div>
-                      <p className="text-base-content text-lg font-medium mb-2">
-                        {is3DMode ? 'Click to select 3D models' : 'Click to select images or videos'}
-                      </p>
-                      <p className="text-base-content/70 text-sm">
-                        or drag and drop
-                      </p>
-                      <p className="text-base-content/55 text-xs mt-2">
-                        {is3DMode ? <>3D: GLB, GLTF, OBJ, FBX, STL, SPZ, 3MF, USDZ<br/>Hosts: UDrop &amp; TeraBox (direct XHR, no 64MiB limit)</> : <>Images: PNG, JPG, GIF up to 10MB<br/>Videos: MP4, WebM, AVI, MOV</>}
-                      </p>
+                {!hasUploadLogPreview ? (
+                  <label className="block">
+                    <div className="flex items-center justify-center w-full min-h-[calc(100vh-16rem)] px-4 transition 
+                                  bg-base-200 border-2 border-dashed border-base-300 rounded-[var(--radius-box)] 
+                                  hover:border-primary hover:bg-base-300/60 cursor-pointer
+                                  group">
+                      <div className="text-center">
+                        <motion.div animate={{ y: is3DMode ? [0, -4, 0] : 0 }} transition={{ duration: 1.6, repeat: is3DMode ? Infinity : 0, ease: 'easeInOut' }}>
+                          {is3DMode ? <Box className="w-16 h-16 mx-auto text-cyan-500 mb-4" /> : <Upload className="w-16 h-16 mx-auto text-base-content/40 group-hover:text-primary transition-colors mb-4" />}
+                        </motion.div>
+                        <p className="text-base-content text-lg font-medium mb-2">
+                          {is3DMode ? 'Click to select 3D models' : 'Click to select images or videos'}
+                        </p>
+                        <p className="text-base-content/70 text-sm">
+                          or drag and drop
+                        </p>
+                        <p className="text-base-content/55 text-xs mt-2">
+                          {is3DMode ? <>3D: GLB, GLTF, OBJ, FBX, STL, SPZ, 3MF, USDZ<br/>Hosts: UDrop &amp; TeraBox (direct XHR, no 64MiB limit)</> : <>Images: PNG, JPG, GIF up to 10MB<br/>Videos: MP4, WebM, AVI, MOV</>}
+                        </p>
+                      </div>
+                      <input
+                        type="file"
+                        accept={is3DMode ? ".glb,.gltf,.obj,.fbx,.stl,.spz,.3mf,.usdz,.usd,.blend,.dae,.ply,.abc,.bvh,model/*,application/octet-stream" : "image/*,video/*"}
+                        multiple
+                        onChange={handleFileUpload}
+                        className="hidden"
+                      />
                     </div>
-                    <input
-                      type="file"
-                      accept={is3DMode ? ".glb,.gltf,.obj,.fbx,.stl,.spz,.3mf,.usdz,.usd,.blend,.dae,.ply,.abc,.bvh,model/*,application/octet-stream" : "image/*,video/*"}
-                      multiple
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
+                  </label>
+                ) : (
+                  <div className="p-4 rounded-[var(--radius-box)] bg-primary-500/10 border border-primary-500/30 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-2xl ${uploadIsActive ? 'animate-pulse' : ''}`}>{is3DMode ? '📦' : '🖼️'}</span>
+                      <div className="flex-1">
+                        <div className="text-sm text-primary-200 mb-2"><span>{uploadProgressHeading}</span></div>
+                        {uploadIsActive && (<div className="w-full h-2 bg-base-300 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-primary-500 to-secondary-500 animate-pulse" /></div>)}
+                      </div>
+                    </div>
+                    <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-100/70 p-3">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div><h4 className="text-sm font-semibold text-base-content">{uploadLogTitle}</h4><p className="text-xs text-base-content/60">{uploadLogDescription}</p></div>
+                        <button type="button" onClick={() => navigate('/logs')} className="btn btn-ghost btn-xs">Open Logs</button>
+                      </div>
+                      <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                        {uploadLogPreviewEntries.length === 0 ? (<div className="rounded-[var(--radius-box)] border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/60">{uploadWaitingMessage}</div>) : (uploadLogPreviewEntries.map((entry, index) => renderUploadLog(entry, index)))}
+                      </div>
+                    </div>
                   </div>
-                </label>
+                )}
                   </div>
                 </div>
                 <div className="min-h-0 space-y-4 overflow-y-auto pr-2" style={{ scrollbarGutter: 'stable' }}>
