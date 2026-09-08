@@ -4836,6 +4836,18 @@ class ImgVaultServiceWorker {
       }
     }
 
+    // Fallback: if spzUrl empty, try videoHosts.terabox/udrop (3D via Terabox single-file path saves there)
+    if (!url && mediaId) {
+      try {
+        const fetchedItem = await this.storage.getImageById(mediaId);
+        const vHosts = fetchedItem?.extraMetadata?.videoHosts || fetchedItem?.videoHosts || {};
+        const tb = vHosts?.terabox || {};
+        const ud = vHosts?.udrop || {};
+        url = tb.directUrl || tb.watchUrl || ud.directUrl || ud.watchUrl || fetchedItem?.teraboxDirectUrl || fetchedItem?.teraboxWatchUrl || fetchedItem?.udropDirectUrl || fetchedItem?.udropWatchUrl || fetchedItem?.spzUrl || '';
+        if (url) console.log('[Fetcher] Fallback to videoHosts/spzUrl for', mediaId, url.slice(0,80));
+      } catch {}
+    }
+
     // Fallback: fetch from URL (service worker has no CORS restrictions).
     if (!url) throw new Error('No URL and no cached data available');
     let fetchUrl = url;

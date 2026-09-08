@@ -1390,14 +1390,17 @@ export default function GalleryPage() {
         textureFileName: textureFile.name, textureFileSize: textureFile.size,
         textureMimeType: textureFile.type || 'image/webp',
         sceneConfig, pageTitle: pageTitle || spzFile.name.replace('.spz',''), description, tags: tagsArray, collectionId: collectionId||null, pageUrl: '', fileLastModified: spzFile.lastModified,
-        spzDirectUrl: spzRes.url || spzRes.watchUrl || '', textureDirectUrl: texRes.url || texRes.watchUrl || '',
+        spzDirectUrl: spzRes.directUrl || spzRes.url || spzRes.watchUrl || '', textureDirectUrl: texRes.directUrl || texRes.url || texRes.watchUrl || '',
         spzFileId: spzRes.fileId || spzRes.filecode || '', textureFileId: texRes.fileId || texRes.filecode || '',
       };
       // Save via background custom path that accepts direct URLs (avoid large array messaging)
       const saved = await sendMessage('saveSceneDirect', payload).catch(async ()=>{
-        // fallback: use generic save via updateImage if saveSceneDirect not yet available
-        const id = await sendMessage('saveUploadedVideo', { imageUrl: '', pageUrl: '', pageTitle: payload.pageTitle, fileName: payload.spzFileName, fileSize: payload.spzFileSize, fileType: 'model/spz', description, tags: tagsArray, collectionId, isVideo: false, videoUploadResults: { [primarySvc.key]: spzRes } });
-        return id;
+        const res = await sendMessage('saveUploadedVideo', { imageUrl: '', pageUrl: '', pageTitle: payload.pageTitle, fileName: payload.spzFileName, fileSize: payload.spzFileSize, fileType: 'model/spz', description, tags: tagsArray, collectionId, isVideo: false, kind: 'scene', videoUploadResults: { [primarySvc.key]: spzRes } });
+        const id = res?.id || res;
+        const spzUrl = spzRes.directUrl || spzRes.url || spzRes.watchUrl || payload.spzDirectUrl || '';
+        const textureUrl = texRes.directUrl || texRes.url || texRes.watchUrl || payload.textureDirectUrl || '';
+        try { await sendMessage('updateImage', { id, spzUrl, textureUrl, configJson: sceneConfig ? JSON.stringify(sceneConfig) : null, kind: 'scene', fileType: 'model/spz', spzFileSize: spzFile.size, textureFileSize: textureFile.size }); } catch {}
+        return { id, spzUrl, textureUrl };
       });
       await appendClientUploadLog(`Scene saved ${saved.id||''}`, 'success');
       return saved;
