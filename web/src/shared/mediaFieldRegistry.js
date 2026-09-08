@@ -230,6 +230,7 @@ function is3DItem(item = {}) {
 
 export function getMediaItemKind(item = {}) {
   if (isSystemMediaItem(item)) return MEDIA_KIND_SYSTEM;
+  if (is3DItem(item) || item?.spzUrl) return MEDIA_KIND_SCENE;
   const explicitKind = typeof item?.kind === 'string' ? item.kind.trim().toLowerCase() : '';
   const fileType = typeof item?.fileType === 'string' ? item.fileType.trim().toLowerCase() : '';
   const hasVideoLinks = hasAnyVideoProviderLink(item);
