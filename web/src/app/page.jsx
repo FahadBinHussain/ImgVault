@@ -1,27 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { 
-  Shield, 
-  Zap, 
-  Search, 
-  Cloud, 
-  Image, 
-  Tag, 
-  Sparkles, 
-  ChevronRight, 
+import { useState, useEffect, useRef } from 'react'
+import {
+  Image,
+  Tag,
+  Sparkles,
+  ChevronRight,
   Download,
   Github,
   Eye,
   Layers,
-  Lock,
-  Cpu,
   ArrowRight,
   Check,
   Star
 } from 'lucide-react'
 import AppNavbar from './components/AppNavbar'
 import BrandLogo from './components/BrandLogo'
+import { ZapIcon, CloudIcon, SearchIcon, ShieldIcon, CpuIcon, LockIcon } from './components/AnimatedFeatureIcons'
 
 function HeroSection() {
   const mockGalleryImages = [
@@ -117,44 +112,45 @@ function HeroSection() {
 }
 
 function FeaturesSection() {
+  const iconRefs = useRef([])
   const features = [
     {
-      icon: Zap,
+      icon: ZapIcon,
       title: 'Perceptual Hashing',
       description: 'Advanced duplicate detection using perceptual hashing algorithms. Never save the same image twice.',
       color: 'from-yellow-500/20 to-orange-500/20',
       iconColor: 'text-warning'
     },
     {
-      icon: Cloud,
+      icon: CloudIcon,
       title: 'Dual Cloud Upload',
       description: 'Automatically upload to both Pixvid and ImgBB for redundancy and easy sharing.',
       color: 'from-blue-500/20 to-cyan-500/20',
       iconColor: 'text-info'
     },
     {
-      icon: Search,
+      icon: SearchIcon,
       title: 'Smart Gallery',
       description: 'Beautiful gallery with instant search, tags, and descriptions for perfect organization.',
       color: 'from-purple-500/20 to-pink-500/20',
       iconColor: 'text-purple-400'
     },
     {
-      icon: Shield,
+      icon: ShieldIcon,
       title: 'Context Preservation',
       description: 'Captures full page metadata, URL, and context with every saved image.',
       color: 'from-green-500/20 to-emerald-500/20',
       iconColor: 'text-success'
     },
     {
-      icon: Cpu,
+      icon: CpuIcon,
       title: 'React + Vite Powered',
       description: 'Built with modern tech stack for lightning-fast performance and smooth UI.',
       color: 'from-red-500/20 to-rose-500/20',
       iconColor: 'text-error'
     },
     {
-      icon: Lock,
+      icon: LockIcon,
       title: 'Privacy First',
       description: 'Your data stays with you. Firebase-powered with full control over your images.',
       color: 'from-indigo-500/20 to-violet-500/20',
@@ -183,9 +179,11 @@ function FeaturesSection() {
             <div 
               key={i}
               className="group glass rounded-[var(--radius-box)] p-6 sm:p-8 hover-lift gradient-border"
+              onMouseEnter={() => iconRefs.current[i]?.startAnimation()}
+              onMouseLeave={() => iconRefs.current[i]?.stopAnimation()}
             >
               <div className={`w-14 h-14 rounded-[var(--radius-box)] bg-gradient-to-br ${feature.color} flex items-center justify-center mb-6`}>
-                <feature.icon className={`w-7 h-7 ${feature.iconColor}`} />
+                <feature.icon ref={(el) => (iconRefs.current[i] = el)} className={`w-7 h-7 ${feature.iconColor}`} />
               </div>
               <h3 className="text-xl font-semibold mb-3">{feature.title}</h3>
               <p className="text-base-content/65 leading-relaxed">{feature.description}</p>
