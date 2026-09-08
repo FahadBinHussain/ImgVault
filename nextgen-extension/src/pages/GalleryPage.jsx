@@ -4284,6 +4284,20 @@ export default function GalleryPage() {
           <div className="h-[calc(100vh-11rem)] min-h-0 overflow-hidden">
             {!uploadImageData ? (
               <div className="space-y-4 h-full overflow-y-auto pr-2">
+                <div className={`rounded-[var(--radius-box)] border p-3 flex items-center justify-between gap-3 ${is3DMode ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-base-300 bg-base-200'}`}>
+                  <div className="flex items-center gap-2">
+                    <motion.div animate={{ rotate: is3DMode ? 360 : 0 }} transition={{ duration: 0.6, ease: 'easeInOut' }}><Box className={`h-5 w-5 ${is3DMode ? 'text-cyan-500' : 'text-base-content/40'}`} /></motion.div>
+                    <div>
+                      <p className="text-sm font-medium text-base-content">3D model mode</p>
+                      <p className="text-xs text-base-content/60">{is3DMode ? 'GLB/GLTF/OBJ/FBX/STL → UDrop/TeraBox (direct XHR)' : 'Toggle on for 3D models (.glb, .obj, .fbx, .stl)'}</p>
+                    </div>
+                    <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold ${is3DMode ? 'bg-cyan-500 text-white' : 'bg-base-300 text-base-content/60'}`}>{is3DMode ? 'ON' : 'OFF'}</span>
+                  </div>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) setSelectedUploadHostKeys((prev) => { const f = prev.filter((k) => ['udrop','terabox'].includes(k)); return f.length ? f : ['udrop']; }); }} className="peer sr-only" />
+                    <span className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
+                  </label>
+                </div>
                 {/* Manual Upload Mode Message */}
                 {isManualUploadMode && (
                   <div className="p-6 rounded-[var(--radius-box)] bg-orange-500/20 border-2 border-orange-500/50">
