@@ -2390,6 +2390,12 @@ class ImgVaultServiceWorker {
           .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
 
+      case 'getSceneDirectUrl':
+        this.getSceneDirectUrl({ mediaId: request.mediaId, url: request.url })
+          .then(url => sendResponse({ success: true, data: url }))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+
       default:
         console.warn('Unknown action:', action);
         return false;
@@ -4938,6 +4944,32 @@ class ImgVaultServiceWorker {
       }
       throw new Error(`All fetch attempts failed for ${fetchUrl.substring(0, 80)}`);
     }
+  }
+
+  async getSceneDirectUrl({ mediaId, url }) {
+    let fetchUrl = url;
+    if (!fetchUrl && mediaId) {
+      try {
+        const fetchedItem = await this.storage.getImageById(mediaId);
+        const vHosts = fetchedItem?.extraMetadata?.videoHosts || fetchedItem?.videoHosts || {};
+        const tb = vHosts?.terabox || {};
+        const ud = vHosts?.udrop || {};
+        fetchUrl = tb.directUrl || tb.watchUrl || ud.directUrl || ud.watchUrl || fetchedItem?.teraboxDirectUrl || fetchedItem?.teraboxWatchUrl || fetchedItem?.udropDirectUrl || fetchedItem?.udropWatchUrl || fetchedItem?.spzUrl || '';
+        if (fetchUrl) console.log('[getSceneDirectUrl] Fallback to videoHosts/spzUrl for', mediaId, fetchUrl.slice(0,80));
+      } catch {}
+    }
+    if (!fetchUrl) throw new Error('No URL and no cached data available');
+    if (fetchUrl.includes('udrop.com/file/')) {
+      try {
+        const pageResp = await fetch(fetchUrl);
+        const html = await pageResp.text();
+        const match = html.match(/url='([^']+)'/i) || html.match(/url="([^"]+)"/i);
+        if (match && match[1]) fetchUrl = match[1];
+      } catch (e) {
+        console.warn('[getSceneDirectUrl] UDrop page parse failed:', e.message);
+      }
+    }
+    return fetchUrl;
   }
 
   async handleSceneUpload(data) {

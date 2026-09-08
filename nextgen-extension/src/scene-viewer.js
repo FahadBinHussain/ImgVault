@@ -163,28 +163,53 @@ try {
     spzBytes = cached.spzBuffer;
     configJson = cached.configJson;
   } else {
-    const fileResponse = await chrome.runtime.sendMessage({
-      action: 'fetchFile',
-      mediaId: sceneId,
-      url: spzUrl,
-    });
-    if (!fileResponse?.success) {
-      const err = fileResponse?.error || 'unknown error';
-      const is404 = err.includes('404');
-      const isExpired = is404 || err.includes('expir') || err.includes('deleted');
-      const msg = isExpired
-        ? 'Scene file expired or was removed from storage. Try re-uploading from the original source, or clear the browser cache if it was recently uploaded.'
-        : `Failed to fetch .spz: ${err}`;
-      throw new Error(msg);
+    // Try direct fetch via getSceneDirectUrl to bypass 64MiB sendMessage limit for large spz
+    let directUrl = spzUrl;
+    try {
+      const urlResp = await chrome.runtime.sendMessage({ action: 'getSceneDirectUrl', mediaId: sceneId, url: spzUrl });
+      if (urlResp?.success && urlResp.data) directUrl = urlResp.data;
+    } catch {}
+    let fetchedViaDirect = false;
+    try {
+      if (directUrl) {
+        const resp = await fetch(directUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        spzBytes = await resp.arrayBuffer();
+        fetchedViaDirect = true;
+        // Try to get configJson via small background call (config is tiny)
+        try {
+          const cfgResp = await chrome.runtime.sendMessage({ action: 'fetchFile', mediaId: sceneId, url: spzUrl });
+          if (cfgResp?.success && cfgResp.data?.configJson) configJson = cfgResp.data.configJson;
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('[Viewer] Direct fetch failed, falling back to background fetchFile', e.message);
     }
-
-    setProgress(40, 'Processing splat file...');
-    if (fileResponse.data.spzBuffer) {
-      spzBytes = new Uint8Array(fileResponse.data.spzBuffer).buffer;
+    if (!fetchedViaDirect) {
+      const fileResponse = await chrome.runtime.sendMessage({
+        action: 'fetchFile',
+        mediaId: sceneId,
+        url: spzUrl,
+      });
+      if (!fileResponse?.success) {
+        const err = fileResponse?.error || 'unknown error';
+        const is404 = err.includes('404');
+        const isExpired = is404 || err.includes('expir') || err.includes('deleted');
+        const msg = isExpired
+          ? 'Scene file expired or was removed from storage. Try re-uploading from the original source, or clear the browser cache if it was recently uploaded.'
+          : `Failed to fetch .spz: ${err}`;
+        throw new Error(msg);
+      }
+      setProgress(40, 'Processing splat file...');
+      if (fileResponse.data.spzBuffer) {
+        spzBytes = new Uint8Array(fileResponse.data.spzBuffer).buffer;
+      } else {
+        spzBytes = new Uint8Array(fileResponse.data.buffer).buffer;
+      }
+      configJson = fileResponse.data.configJson || null;
     } else {
-      spzBytes = new Uint8Array(fileResponse.data.buffer).buffer;
+      setProgress(40, 'Processing splat file...');
     }
-    configJson = fileResponse.data.configJson || null;
 
     // Cache for instant reload
     setCachedBlob(sceneId, spzBytes, configJson);
