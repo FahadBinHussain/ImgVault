@@ -56,6 +56,14 @@ export default function SceneUploadDialog({ isOpen, onClose, onUploaded }) {
   const handleUpload = async () => {
     if (!spzFile || !textureFile || !configFile) return;
 
+    // 64MiB guard: runtime.sendMessage limit is 64MiB; spzArray as JSON explodes (~3x).
+    // For >20MB spz, use the Gallery 3D switch (direct XHR via UDrop/TeraBox) instead.
+    const totalBytes = (spzFile.size || 0) + (textureFile.size || 0);
+    if (totalBytes > 20 * 1024 * 1024) {
+      alert(`Scene files too large for service-worker messaging (${(totalBytes/1024/1024).toFixed(1)} MB > 20 MB). Use Gallery → Upload → 3D switch (UDrop/TeraBox direct XHR, no 64MiB limit) for large 3D models.`);
+      return;
+    }
+
     try {
       const tagsArray = tags.split(',').map(t => t.trim()).filter(t => t.length > 0);
 

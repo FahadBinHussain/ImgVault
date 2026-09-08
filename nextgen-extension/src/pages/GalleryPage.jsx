@@ -384,6 +384,7 @@ export default function GalleryPage() {
     failed: 0,
     currentFile: '',
   });
+  const [is3DMode, setIs3DMode] = useState(false);
 
   // Scene upload state
   const [showSceneUploadDialog, setShowSceneUploadDialog] = useState(false);
@@ -408,12 +409,15 @@ export default function GalleryPage() {
   const batchDuplicateBypassFileRef = useRef(null);
 
   const configuredUploadServices = useMemo(() => {
+    if (is3DMode) {
+      return getConfiguredVideoUploadServices(uploadHostSettings).filter((s) => ['udrop', 'terabox'].includes(s.key));
+    }
     if (uploadImageData?.isVideo) {
       return getConfiguredVideoUploadServices(uploadHostSettings);
     }
 
     return IMAGE_UPLOAD_SERVICES.filter((service) => service.isConfigured(uploadHostSettings));
-  }, [uploadHostSettings, uploadImageData?.isVideo]);
+  }, [uploadHostSettings, uploadImageData?.isVideo, is3DMode]);
 
   const selectedUploadHostLabel = useMemo(() => {
     const labels = configuredUploadServices
@@ -1000,8 +1004,11 @@ export default function GalleryPage() {
       // DB-first: reserve the item now so a browser/tab death mid-upload
       // leaves the item in the DB (marked pendingUpload) instead of an
       // unrecoverable orphan file on the host.
+      const pendingMetaVideo = { ...uploadData };
+      delete pendingMetaVideo.fileBlob;
+      delete pendingMetaVideo.file;
       const pendingReservation = await sendMessage('createPendingUpload', {
-        ...uploadData,
+        ...pendingMetaVideo,
         fileName: uploadData.fileName || getFileNameFromPath(uploadData.filePath || '') || 'video.mp4',
       }).catch(async (err) => {
         await appendClientUploadLog(`[PENDING UPLOAD] Failed to reserve DB item: ${err.message || String(err)}`, 'error');
@@ -1252,6 +1259,88 @@ export default function GalleryPage() {
       if (activeVideoUploadControllerRef.current === uploadController) {
         activeVideoUploadControllerRef.current = null;
       }
+      await chrome.storage.local.set({ uploadActive: false });
+    }
+  };
+
+  const upload3DDirectly = async (uploadData) => {
+    const uploadController = new AbortController();
+    activeVideoUploadControllerRef.current = uploadController;
+    const THREE_D_PROVIDERS = ['udrop', 'terabox'];
+    await chrome.storage.local.set({ uploadActive: true, uploadStatus: 'Preparing 3D model upload...', uploadStatusLogs: [] });
+    await appendClientUploadLog(`3D payload ready: ${formatBytes(uploadData.fileSize || uploadData.fileBlob?.size || 0)} (${uploadData.fileName})`);
+    try {
+      const settings = await sendMessage('getVideoHostSettings');
+      const configuredServices = getConfiguredVideoUploadServices(settings).filter((s) => THREE_D_PROVIDERS.includes(s.key));
+      const selectedServices = filterUploadServicesByKeys(configuredServices, uploadData.selectedHostKeys);
+      if (configuredServices.length === 0) throw new Error('No 3D host is configured (need UDrop or TeraBox).');
+      if (selectedServices.length === 0) throw new Error('Select at least one 3D host (UDrop/TeraBox).');
+      const pendingMeta = { ...uploadData };
+      delete pendingMeta.fileBlob;
+      delete pendingMeta.file;
+      const pendingReservation = await sendMessage('createPendingUpload', { ...pendingMeta, fileName: uploadData.fileName || 'model.glb', isVideo: true }).catch(async (err) => {
+        await appendClientUploadLog(`[PENDING UPLOAD] Failed to reserve DB item: ${err.message || String(err)}`, 'error');
+        return null;
+      });
+      const pendingItemId = pendingReservation?.id || null;
+      const uploadResults = {};
+      let hostSucceeded = false;
+      const uploadErrors = [];
+      for (const service of selectedServices) {
+        const uploader = createVideoUploader(service);
+        if (!uploader) {
+          uploadErrors.push(`${service.label}: uploader not available`);
+          await appendClientUploadLog(`${service.label} uploader is not available.`, 'error');
+          continue;
+        }
+        await appendClientUploadLog(`Starting ${service.label} XHR upload for 3D model...`);
+        await chrome.storage.local.set({ uploadStatus: `Uploading 3D model to ${service.label}...` });
+        try {
+          const result = await service.uploadWithProgress({ uploader, blob: uploadData.fileBlob, settings, data: { ...uploadData, fileName: uploadData.fileName || 'model.glb' }, onProgress: async ({ loaded, total, percent }) => {
+            const totalLabel = total ? formatBytes(total) : formatBytes(uploadData.fileBlob?.size || 0);
+            const loadedLabel = formatBytes(loaded);
+            const message = percent !== null ? `${service.label} 3D progress: ${percent}% (${loadedLabel} / ${totalLabel})` : `${service.label} 3D progress: ${loadedLabel} sent`;
+            await chrome.storage.local.set({ uploadStatus: message });
+            await appendClientUploadLog(message);
+          }, signal: uploadController.signal });
+          uploadResults[service.key] = result;
+          await appendClientVideoProviderResultLog(service, result);
+          hostSucceeded = true;
+        } catch (error) {
+          const message = error.message || String(error);
+          await appendClientUploadLog(`${service.label} 3D upload failed: ${message}`, 'error');
+          if (uploadController.signal.aborted) throw error;
+          uploadErrors.push(`${service.label}: ${message}`);
+        }
+      }
+      if (!hostSucceeded) throw new Error(uploadErrors.length > 0 ? `3D upload failed on all selected hosts. ${uploadErrors.join(' | ')}` : 'No selected 3D host is configured.');
+      if (uploadErrors.length > 0) await appendClientUploadLog(`Partial 3D success. ${uploadErrors.join(' | ')}`, 'warning');
+      await chrome.storage.local.set({ uploadStatus: 'Saving 3D model metadata...' });
+      const fileExt = (uploadData.fileName || '').split('.').pop()?.toLowerCase() || 'glb';
+      const isSpz = fileExt === 'spz';
+      if (pendingItemId) {
+        const updates = {};
+        for (const [k, r] of Object.entries(uploadResults)) {
+          const svc = getVideoUploadService(k);
+          const merged = mergeVideoProviderResult({}, k, r);
+          if (svc?.watchUrlField) updates[svc.watchUrlField] = merged[svc.watchUrlField] || '';
+          if (svc?.directUrlField) updates[svc.directUrlField] = merged[svc.directUrlField] || '';
+          if (svc?.aliasWatchUrlField) updates[svc.aliasWatchUrlField] = merged[svc.aliasWatchUrlField] || '';
+        }
+        const extraUpdate = isSpz ? { spzUrl: Object.values(uploadResults)[0]?.url || '' } : {};
+        const finalized = await sendMessage('finalizeUploadedVideo', { id: pendingItemId, videoUploadResults: uploadResults, videoUploadErrors: uploadErrors, ...extraUpdate });
+        if (isSpz) await sendMessage('updateImage', { id: pendingItemId, ...extraUpdate, fileType: uploadData.fileType || 'application/octet-stream', fileName: uploadData.fileName });
+        await appendClientUploadLog(`[SAVE 3D] Finalized item with ID: ${finalized.id}`, 'success');
+        return finalized;
+      }
+      const saved = await sendMessage('saveUploadedVideo', { ...pendingMeta, videoUploadResults: uploadResults, videoUploadErrors: uploadErrors });
+      await appendClientUploadLog(`[SAVE 3D] Saved with ID: ${saved.id}`, 'success');
+      return saved;
+    } catch (error) {
+      await appendClientUploadLog(`Direct 3D upload failed: ${error.message || String(error)}`, 'error');
+      throw error;
+    } finally {
+      if (activeVideoUploadControllerRef.current === uploadController) activeVideoUploadControllerRef.current = null;
       await chrome.storage.local.set({ uploadActive: false });
     }
   };
@@ -1588,8 +1677,12 @@ export default function GalleryPage() {
     batchDuplicateBypassFileRef.current = null;
   };
 
+  const THREE_D_EXT_RE = /\.(glb|gltf|obj|fbx|stl|spz|3mf|usdz|usd|blend|dae|ply|abc|bvh)$/i;
+  const is3DUploadFile = (file) => THREE_D_EXT_RE.test(file?.name || '') || String(file?.type || '').toLowerCase().includes('model/');
   const isSupportedUploadFile = (file) => {
     if (!file) return false;
+    if (is3DMode && is3DUploadFile(file)) return true;
+    if (!is3DMode && is3DUploadFile(file)) return false;
     if (file.type?.startsWith('image/') || file.type?.startsWith('video/')) return true;
     return /\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|avi|mov|mkv|m4v)$/i.test(file.name || '');
   };
@@ -1678,8 +1771,9 @@ export default function GalleryPage() {
     const finalPageTitle = preservePageTitle && preservePageTitle !== 'Uploaded manually'
       ? preservePageTitle
       : 'Uploaded manually';
-    const isVideo = isVideoUploadFile(file);
-    const previewUrl = isVideo ? URL.createObjectURL(file) : await new Promise((resolve, reject) => {
+    const is3D = is3DUploadFile(file);
+    const isVideo = !is3D && isVideoUploadFile(file);
+    const previewUrl = is3D ? '' : isVideo ? URL.createObjectURL(file) : await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
@@ -1734,7 +1828,8 @@ export default function GalleryPage() {
       timestamp: Date.now(),
       file,
       isVideo,
-      fileType: file.type,
+      is3D,
+      fileType: file.type || (is3D ? 'model/' + (file.name.split('.').pop() || 'glb') : ''),
       ...(nextUploadMetadata?.width != null && nextUploadMetadata?.height != null
         ? { width: nextUploadMetadata.width, height: nextUploadMetadata.height }
         : {}),
@@ -1975,6 +2070,7 @@ export default function GalleryPage() {
       fileLastModified: mediaData?.file?.lastModified || null,
       collectionId: selectedCollectionId || null,
       isVideo: Boolean(mediaData?.isVideo),
+      is3D: Boolean(is3DMode || mediaData?.is3D || is3DUploadFile(mediaData?.file)),
       fileType: mediaData?.fileType || mediaData?.file?.type || null,
       duration: metadata?.duration ?? null,
       width: metadata?.width ?? null,
@@ -2001,6 +2097,23 @@ export default function GalleryPage() {
 
   const uploadPreparedMedia = async (uploadData) => {
     assertSerializableUploadData(uploadData);
+
+    // 64MiB guard: large blobs must NEVER go via runtime.sendMessage (limit 64MiB).
+    // vault/video/3D already do page-side XHR; for large images or any 3D blob, force direct path.
+    const blobSize = uploadData.fileBlob?.size || uploadData.fileSize || 0;
+    const isLargeForMessage = blobSize > 60 * 1024 * 1024 || blobSize > 64 * 1024 * 1024 * 0.9;
+    if (uploadData.is3D || isLargeForMessage) {
+      if (isLargeForMessage && !uploadData.isVideo && !uploadData.is3D && !uploadData.isVaulted) {
+        await appendClientUploadLog(`Large payload (${formatBytes(blobSize)}) — using direct page upload to avoid 64MiB message limit.`, 'warning');
+      }
+      if (uploadData.is3D) return upload3DDirectly(uploadData);
+      if (uploadData.fileBlob) {
+        // fallback: treat as video/3D direct (udrop/terabox handle generic files)
+        const fallbackData = { ...uploadData, is3D: true };
+        if (!fallbackData.selectedHostKeys || fallbackData.selectedHostKeys.length === 0) fallbackData.selectedHostKeys = ['udrop'];
+        return upload3DDirectly(fallbackData);
+      }
+    }
 
     // Vaulted uploads encrypt + XHR-upload in the page for real progress.
     if (uploadData.isVaulted) {
@@ -4135,8 +4248,10 @@ export default function GalleryPage() {
           className="!bg-base-100 !backdrop-blur-none !border-base-300 shadow-2xl"
           title={
             <div className="flex items-center justify-between w-full">
-              <span>
-                {uploadQueue.length > 1 ? `Upload Batch (${uploadQueue.length})` : 'Upload Image'}
+              <span className="flex items-center gap-2">
+                {is3DMode && <motion.span animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}><Box className="w-5 h-5 text-cyan-500" /></motion.span>}
+                <span>{is3DMode ? (uploadQueue.length > 1 ? `Upload 3D Batch (${uploadQueue.length})` : 'Upload 3D Model') : uploadQueue.length > 1 ? `Upload Batch (${uploadQueue.length})` : 'Upload Image'}</span>
+                {is3DMode && <span className="rounded-full bg-cyan-500 px-2 py-0.5 text-xs font-bold text-white">UDrop • TeraBox</span>}
               </span>
               <div className="flex gap-2">
                 <button
@@ -4200,22 +4315,22 @@ export default function GalleryPage() {
                                 hover:border-primary hover:bg-base-300/60 cursor-pointer
                                 group">
                     <div className="text-center">
-                      <Upload className="w-16 h-16 mx-auto text-base-content/40 group-hover:text-primary 
-                                       transition-colors mb-4" />
+                      <motion.div animate={{ y: is3DMode ? [0, -4, 0] : 0 }} transition={{ duration: 1.6, repeat: is3DMode ? Infinity : 0, ease: 'easeInOut' }}>
+                        {is3DMode ? <Box className="w-16 h-16 mx-auto text-cyan-500 mb-4" /> : <Upload className="w-16 h-16 mx-auto text-base-content/40 group-hover:text-primary transition-colors mb-4" />}
+                      </motion.div>
                       <p className="text-base-content text-lg font-medium mb-2">
-                        Click to select images or videos
+                        {is3DMode ? 'Click to select 3D models' : 'Click to select images or videos'}
                       </p>
                       <p className="text-base-content/70 text-sm">
                         or drag and drop
                       </p>
                       <p className="text-base-content/55 text-xs mt-2">
-                        Images: PNG, JPG, GIF up to 10MB<br/>
-                        Videos: MP4, WebM, AVI, MOV
+                        {is3DMode ? <>3D: GLB, GLTF, OBJ, FBX, STL, SPZ, 3MF, USDZ<br/>Hosts: UDrop &amp; TeraBox (direct XHR, no 64MiB limit)</> : <>Images: PNG, JPG, GIF up to 10MB<br/>Videos: MP4, WebM, AVI, MOV</>}
                       </p>
                     </div>
                     <input
                       type="file"
-                      accept="image/*,video/*"
+                      accept={is3DMode ? ".glb,.gltf,.obj,.fbx,.stl,.spz,.3mf,.usdz,.usd,.blend,.dae,.ply,.abc,.bvh,model/*,application/octet-stream" : "image/*,video/*"}
                       multiple
                       onChange={handleFileUpload}
                       className="hidden"
@@ -4229,7 +4344,16 @@ export default function GalleryPage() {
                 <div className="min-h-0 xl:pr-2 xl:overflow-y-auto">
                   <div className="space-y-3">
                     <div className="relative rounded-[var(--radius-box)] overflow-hidden bg-base-200 border border-base-300">
-                      {uploadImageData.isVideo ? (
+                      {uploadImageData.is3D || is3DUploadFile(uploadImageData.file) ? (
+                        <div className="w-full h-64 max-h-96 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 p-6">
+                          <motion.div animate={{ rotateY: 360 }} transition={{ duration: 3, repeat: Infinity, ease: 'linear' }} style={{ perspective: 400 }}>
+                            <Box className="w-16 h-16 text-cyan-500" />
+                          </motion.div>
+                          <p className="text-sm font-medium text-base-content">{uploadImageData.fileName || '3D model'}</p>
+                          <p className="text-xs text-base-content/60">{formatBytes(uploadImageData.file?.size || 0)} • { (uploadImageData.fileName || '').split('.').pop()?.toUpperCase() || '3D'}</p>
+                          <p className="text-xs text-cyan-600">UDrop / TeraBox • direct XHR</p>
+                        </div>
+                      ) : uploadImageData.isVideo ? (
                         <video
                           src={uploadImageData.srcUrl}
                           controls
@@ -4609,15 +4733,40 @@ export default function GalleryPage() {
                   )}
 
                   {!uploadToVault && (
+                    <div className={`rounded-[var(--radius-box)] border transition-colors ${is3DMode ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-base-300 bg-base-200'}`}>
+                      <label className="flex cursor-pointer items-center justify-between gap-4 p-4 select-none">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <motion.div animate={{ rotate: is3DMode ? 360 : 0 }} transition={{ duration: 0.6, ease: 'easeInOut' }}>
+                              <Box className={`h-4 w-4 ${is3DMode ? 'text-cyan-500' : 'text-base-content/40'}`} />
+                            </motion.div>
+                            <p className="text-sm font-medium text-base-content">3D model</p>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${is3DMode ? 'bg-cyan-500 text-white' : 'bg-base-300 text-base-content/60'}`}>{is3DMode ? 'ON' : 'OFF'}</span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-base-content/60">
+                            {is3DMode ? 'Upload .glb/.gltf/.obj/.fbx/.stl etc to UDrop/TeraBox via direct XHR (no 64MiB limit).' : 'Switch on to upload 3D models (.glb, .obj, .fbx, .stl, .spz).'}
+                          </p>
+                        </div>
+                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) { setSelectedUploadHostKeys((prev) => { const filtered = prev.filter((k) => ['udrop','terabox'].includes(k)); return filtered.length ? filtered : ['udrop']; }); } }} disabled={uploading} className="peer sr-only" />
+                        <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}>
+                          <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
+                  {!uploadToVault && (
                     <UploadHostSelector
                       services={configuredUploadServices}
                       selectedKeys={selectedUploadHostKeys}
                       onChange={setSelectedUploadHostKeys}
                       disabled={uploading}
                       emptyMessage={
-                        uploadImageData?.isVideo
-                          ? 'No video hosts are configured. Add Filemoon or UDrop keys in Settings.'
-                          : 'No image hosts are configured. Add Pixvid or ImgBB API keys in Settings.'
+                        is3DMode
+                          ? 'No 3D hosts configured. Add UDrop keys or log into TeraBox (cookie auto-read).'
+                          : uploadImageData?.isVideo
+                            ? 'No video hosts are configured. Add Filemoon or UDrop keys in Settings.'
+                            : 'No image hosts are configured. Add Pixvid or ImgBB API keys in Settings.'
                       }
                     />
                   )}
