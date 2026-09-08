@@ -545,6 +545,11 @@ export default function HostPage() {
       }
     } catch (error) {
       const errorMsg = error?.error || error?.message || 'Download failed';
+      const isCancelled = error?.cancelled || error?.details?.cancelled || /Download stopped/i.test(errorMsg);
+      if (isCancelled) {
+        addLog('Download stopped.', 'warning');
+        return;
+      }
       if (errorMsg.includes('[RETRY_WITH_BEST_FORMAT]')) {
         setRetryWithBest(true);
         addLog(errorMsg.replace('[RETRY_WITH_BEST_FORMAT]', ''), 'error');
@@ -574,12 +579,24 @@ export default function HostPage() {
       });
 
       if (!response?.success) {
-        throw new Error(response?.error || 'Failed to stop native download');
+        // The background already treats "host gone" as a successful stop, but
+        // older builds surface it as failure — handle both gracefully.
+        const raw = response?.error || '';
+        if (/Error when communicating|Native host disconnected/i.test(raw)) {
+          addLog('Stop signal sent — host connection closed. Download will be marked as stopped.', 'warning');
+          return;
+        }
+        throw new Error(raw || 'Failed to stop native download');
       }
 
       addLog(response.data?.message || 'Stop signal sent to native host.', 'warning');
     } catch (error) {
-      addLog(error.message || 'Failed to stop native download.', 'error');
+      const raw = error.message || 'Failed to stop native download.';
+      if (/Error when communicating|Native host disconnected/i.test(raw)) {
+        addLog('Stop signal sent — host connection closed.', 'warning');
+        return;
+      }
+      addLog(raw, 'error');
     } finally {
       setBusyAction('');
     }

@@ -160,6 +160,52 @@ fn remove_request_pid(request_id: &str) {
     let _ = fs::remove_file(get_request_pid_path(request_id));
 }
 
+fn get_cancel_flag_path(request_id: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "imgvault-native-download-{}.cancel",
+        sanitize_request_id(request_id)
+    ))
+}
+
+fn write_cancel_flag(request_id: &str) -> Result<(), String> {
+    fs::write(get_cancel_flag_path(request_id), "1")
+        .map_err(|e| format!("Failed to write cancel flag: {}", e))
+}
+
+fn has_cancel_flag(request_id: &str) -> bool {
+    get_cancel_flag_path(request_id).exists()
+}
+
+fn remove_cancel_flag(request_id: &str) {
+    let _ = fs::remove_file(get_cancel_flag_path(request_id));
+}
+
+fn truncate_for_native_message(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    // Find a safe UTF-8 boundary at or before max_bytes
+    let mut safe_cut = max_bytes;
+    while safe_cut > 0 && !text.is_char_boundary(safe_cut) {
+        safe_cut -= 1;
+    }
+    let truncated = &text[..safe_cut];
+    // Prefer to cut at last newline to avoid breaking mid-line
+    let cut = truncated.rfind('\n').unwrap_or(safe_cut);
+    // Ensure the chosen cut is still a char boundary (newline is always 1 byte)
+    let mut final_cut = cut;
+    while final_cut > 0 && !text.is_char_boundary(final_cut) {
+        final_cut -= 1;
+    }
+    format!(
+        "{}… [truncated {} bytes, showing first {} of {}]",
+        &text[..final_cut],
+        text.len() - final_cut,
+        final_cut,
+        text.len()
+    )
+}
+
 // Completion journal: the single-threaded host keeps downloading even if the
 // extension's port dies (extension reload / service worker restart), so the
 // extension can't receive the final result. The host records the outcome to a
@@ -218,6 +264,38 @@ fn kill_process_tree(pid: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    // Try graceful termination first (no /F), give yt-dlp a moment to clean up its .part file,
+    // then force kill if it is still alive. This avoids leaving a corrupt partial file
+    // and is noticeably faster to settle than an immediate /F.
+    let graceful = Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
+
+    // If graceful succeeded the process tree is already gone
+    if graceful.success() {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        // Probe whether the PID still exists via tasklist
+        let probe = Command::new("tasklist")
+            .arg("/FI")
+            .arg(format!("PID eq {}", pid))
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if let Ok(output) = probe {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            // tasklist prints the PID when still alive
+            if !stdout.contains(&pid.to_string()) {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        }
+    }
+
+    // Force kill fallback
     let status = Command::new("taskkill")
         .arg("/PID")
         .arg(pid.to_string())
@@ -251,8 +329,18 @@ fn kill_process_tree(pid: u32) -> Result<(), String> {
 
 fn cancel_download_request(request_id: &str) -> Result<String, String> {
     let pid_path = get_request_pid_path(request_id);
+    // Graceful stop: if no pid file, the download already finished or was already stopped.
+    // Return success so the UI doesn't show a scary "No active download" error.
     if !pid_path.exists() {
-        return Err(format!("No active native download found for request id: {}", request_id));
+        // Check if a cancel flag already exists — second stop click while first is still settling
+        if has_cancel_flag(request_id) {
+            return Ok(format!("Stop already requested for {}", request_id));
+        }
+        // Also check journal — if download finished naturally between the UI read and the stop click
+        if read_download_journal(request_id).is_some() {
+            return Ok(format!("Download already finished for {}", request_id));
+        }
+        return Ok(format!("No active download for {} — already stopped", request_id));
     }
 
     let pid_text = fs::read_to_string(&pid_path)
@@ -262,10 +350,26 @@ fn cancel_download_request(request_id: &str) -> Result<String, String> {
         .parse::<u32>()
         .map_err(|e| format!("Failed to parse request pid: {}", e))?;
 
-    kill_process_tree(pid)?;
-    remove_request_pid(request_id);
+    // Flag the request as user-cancelled so the blocked download thread can
+    // distinguish a kill from a real yt-dlp failure and send a small
+    // "Download stopped by user" response instead of a multi-MB stdout dump
+    // (which would exceed Chrome's 1 MB native-message limit and surface as
+    // "Error when communicating with the native messaging host.").
+    let _ = write_cancel_flag(request_id);
 
-    Ok(format!("Stop signal sent for request {}", request_id))
+    match kill_process_tree(pid) {
+        Ok(_) => {
+            remove_request_pid(request_id);
+            Ok(format!("Stop signal sent for request {}", request_id))
+        }
+        Err(e) => {
+            // Even if taskkill reports failure (process already exited), treat as success —
+            // the important part is the cancel flag above, which tells the download thread
+            // to settle gracefully.
+            remove_request_pid(request_id);
+            Ok(format!("Stop signal sent for request {} ({}). Cleaning up.", request_id, e))
+        }
+    }
 }
 
 fn write_temp_cookies_file(cookies: &[BrowserCookie]) -> Result<PathBuf, String> {
@@ -917,8 +1021,37 @@ fn download_video_with_progress(
 
     cleanup_temp_cookies_file(&cookies_path);
 
-    let stdout_text = stdout_handle.join().unwrap_or_else(|_| String::new());
-    let stderr_text = stderr_handle.join().unwrap_or_else(|_| String::new());
+    let mut stdout_text = stdout_handle.join().unwrap_or_else(|_| String::new());
+    let mut stderr_text = stderr_handle.join().unwrap_or_else(|_| String::new());
+
+    // If the user requested a stop, the child was killed via taskkill. The
+    // stdout/stderr buffers can be hundreds of KB (progress spam) and the
+    // final native message would exceed Chrome's 1 MB limit, which surfaces
+    // as "Error when communicating with the native messaging host." Treat
+    // this as a graceful cancellation with a small, clear message instead of
+    // dumping the full yt-dlp log back over the wire.
+    let is_user_cancelled = request_id.map(|id| has_cancel_flag(id)).unwrap_or(false);
+    if is_user_cancelled {
+        if let Some(active_request_id) = request_id {
+            remove_cancel_flag(active_request_id);
+            remove_request_pid(active_request_id);
+        }
+        // Keep only a tiny tail for diagnostics; the full log is already streamed as progress
+        stdout_text = truncate_for_native_message(&stdout_text, 8000);
+        stderr_text = truncate_for_native_message(&stderr_text, 8000);
+        return Err(DownloadOutcome {
+            message: "Download stopped by user".to_string(),
+            file_path: None,
+            stdout: stdout_text,
+            stderr: stderr_text,
+        });
+    }
+
+    // Truncate final payloads to stay safely under Chrome's 1 MB native
+    // message cap (JSON envelope + both streams). 40 KB each is plenty for
+    // diagnostics and avoids the silent disconnect.
+    stdout_text = truncate_for_native_message(&stdout_text, 40_000);
+    stderr_text = truncate_for_native_message(&stderr_text, 40_000);
     let file_path = stdout_text
         .lines()
         .rev()
@@ -1258,6 +1391,7 @@ fn handle_native_messaging() {
                         if let Some(active_request_id) = native_msg.request_id.as_deref() {
                             remove_download_journal(active_request_id);
                             remove_request_pid(active_request_id);
+                            remove_cancel_flag(active_request_id);
                         }
                         NativeResponse {
                             success: true,

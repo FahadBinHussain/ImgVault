@@ -105,6 +105,7 @@ class ImgVaultServiceWorker {
     this.teraboxUploader = new TeraBoxUploader();
     this.activeUploadController = null;
     this.activeNativeDownloadPorts = new Map();
+    this.cancellingNativeDownloads = new Set();
     this.vaultMasterKey = null;
     this.vaultStreamUrlCache = new Map();
     this.initialized = false;
@@ -2498,18 +2499,22 @@ class ImgVaultServiceWorker {
     }
 
     const entry = this.buildNativeDownloadLogEntry(message, type, stream);
-    const settlesCancellation =
+    // "Stop signal sent" is just an ack that the kill was dispatched — the
+    // download hasn't actually exited yet, so don't settle on it. Only settle
+    // when yt-dlp itself exits (small "Download stopped" message) or the host
+    // reports a real failure while we were cancelling.
+    const shouldSettle =
       current.status === 'cancelling' &&
-      /yt-dlp failed|download stopped|stop signal sent|native host disconnected unexpectedly|native host download failed/i.test(
+      /yt-dlp failed|download stopped|native host disconnected unexpectedly|native host download failed/i.test(
         String(message || '')
       );
 
     await this.setActiveNativeDownloadRecord({
       ...current,
-      status: settlesCancellation ? 'cancelled' : current.status,
+      status: shouldSettle ? 'cancelled' : current.status,
       updatedAt: Date.now(),
-      completedAt: settlesCancellation ? Date.now() : current.completedAt,
-      lastMessage: settlesCancellation ? 'Download stopped.' : message,
+      completedAt: shouldSettle ? Date.now() : current.completedAt,
+      lastMessage: shouldSettle ? 'Download stopped.' : message,
       logs: [entry, ...(current.logs || [])].slice(0, 300),
     });
   }
@@ -2569,6 +2574,11 @@ class ImgVaultServiceWorker {
       throw new Error('Missing native download request id.');
     }
 
+    // Synchronous in-memory flag so concurrent port handlers see cancellation
+    // immediately, before the async storage write lands (avoids race that
+    // surfaced as "Error when communicating with the native messaging host." x4).
+    this.cancellingNativeDownloads.add(activeRequestId);
+
     await this.updateActiveNativeDownload(activeRequestId, {
       status: 'cancelling',
       lastMessage: 'Stopping native download...',
@@ -2578,32 +2588,64 @@ class ImgVaultServiceWorker {
     try {
       const result = await this.handleNativeHostCommand('cancel_download', {
         request_id: activeRequestId,
-      });
+      }, 10000);
 
-      await this.finishActiveNativeDownload(activeRequestId, {
-        status: 'cancelled',
-        lastMessage: result?.message || 'Download stopped.',
-        error: '',
+      // Don't mark as cancelled yet — the download port's onMessage/onDisconnect
+      // will settle the record when yt-dlp actually exits (with a small
+      // "Download stopped by user" message). We just acknowledge the kill signal.
+      await this.updateActiveNativeDownload(activeRequestId, {
+        lastMessage: result?.message || 'Stop signal sent to native host.',
       });
       await this.appendNativeDownloadLog(
         activeRequestId,
-        result?.message || 'Download stopped.',
-        'warning',
+        result?.message || 'Stop signal sent to native host.',
+        'info',
         'system'
       );
+
+      // Fallback: if the original host never settles (e.g., it crashed), force
+      // to cancelled after a short grace period so the UI doesn't stay stuck.
+      setTimeout(async () => {
+        const status = await this.getActiveNativeDownloadStatus(activeRequestId);
+        if (status === 'cancelling') {
+          await this.finishActiveNativeDownload(activeRequestId, {
+            status: 'cancelled',
+            error: '',
+            lastMessage: 'Download stopped.',
+          });
+          await this.appendNativeDownloadLog(activeRequestId, 'Download stopped.', 'warning', 'system');
+          this.cancellingNativeDownloads.delete(activeRequestId);
+        }
+      }, 12000);
 
       return result;
     } catch (error) {
+      const rawMsg = error?.message || 'Failed to stop native download.';
+      const isHostGone = /Error when communicating with the native messaging host|Native host disconnected/i.test(rawMsg);
+      // If the host is gone while we were trying to cancel, treat it as a
+      // successful stop — the download process died with the host, which is
+      // the desired outcome for the user.
+      if (isHostGone) {
+        await this.updateActiveNativeDownload(activeRequestId, {
+          lastMessage: 'Stop signal sent — host connection closed.',
+        });
+        await this.appendNativeDownloadLog(activeRequestId, 'Stop signal sent — host connection closed. Download will be marked as stopped.', 'warning', 'system');
+        setTimeout(async () => {
+          const status = await this.getActiveNativeDownloadStatus(activeRequestId);
+          if (status === 'cancelling') {
+            await this.finishActiveNativeDownload(activeRequestId, { status: 'cancelled', error: '', lastMessage: 'Download stopped.' });
+            await this.appendNativeDownloadLog(activeRequestId, 'Download stopped.', 'warning', 'system');
+            this.cancellingNativeDownloads.delete(activeRequestId);
+          }
+        }, 2000);
+        return { message: 'Host connection closed — download stopped.' };
+      }
       await this.updateActiveNativeDownload(activeRequestId, {
         status: 'failed',
-        lastMessage: error?.message || 'Failed to stop native download.',
+        lastMessage: rawMsg,
       });
-      await this.appendNativeDownloadLog(
-        activeRequestId,
-        error?.message || 'Failed to stop native download.',
-        'error',
-        'system'
-      );
+      await this.appendNativeDownloadLog(activeRequestId, rawMsg, 'error', 'system');
+      this.cancellingNativeDownloads.delete(activeRequestId);
       throw error;
     }
   }
@@ -4050,6 +4092,7 @@ class ImgVaultServiceWorker {
           clearTimeout(timeout);
           
           if (response.success) {
+            this.cancellingNativeDownloads.delete(activeRequestId);
             this.settleNativeDownloadCompleted(
               activeRequestId,
               url,
@@ -4064,11 +4107,15 @@ class ImgVaultServiceWorker {
               });
           } else {
             (async () => {
+              const isMemoryCancelled = this.cancellingNativeDownloads.has(activeRequestId);
               const currentStatus = await this.getActiveNativeDownloadStatus(activeRequestId);
-              const isUserCancelled =
+              const isStatusCancelled =
                 currentStatus === 'cancelling' || currentStatus === 'cancelled';
+              const isMessageCancelled = /Download stopped by user/i.test(response.message || '');
+              const isUserCancelled = isMemoryCancelled || isStatusCancelled || isMessageCancelled;
 
               if (isUserCancelled) {
+                this.cancellingNativeDownloads.delete(activeRequestId);
                 await this.finishActiveNativeDownload(activeRequestId, {
                   status: 'cancelled',
                   filePath: response.filePath || '',
@@ -4091,6 +4138,7 @@ class ImgVaultServiceWorker {
                 return;
               }
 
+              this.cancellingNativeDownloads.delete(activeRequestId);
               await this.finishActiveNativeDownload(activeRequestId, {
                 status: 'failed',
                 error: response.message || 'Native host download failed',
@@ -4134,11 +4182,21 @@ class ImgVaultServiceWorker {
               console.error(`❌ [NATIVE] Error details:`, errorMsg);
               this.activeNativeDownloadPorts.delete(activeRequestId);
 
+              const isMemoryCancelled = this.cancellingNativeDownloads.has(activeRequestId);
               const currentStatus = await this.getActiveNativeDownloadStatus(activeRequestId);
-              const isUserCancelled =
+              const isStatusCancelled =
                 currentStatus === 'cancelling' || currentStatus === 'cancelled';
+              // Chrome's 1 MB limit surfaces as "Error when communicating..." — if we were
+              // in the middle of cancelling, that error is expected and should be
+              // swallowed as a graceful stop, not a scary host error.
+              const isCancellationDisconnect = isMemoryCancelled || isStatusCancelled ||
+                /Error when communicating with the native messaging host/i.test(errorMsg);
+              // Only treat the generic Chrome disconnect as cancellation when we
+              // actually issued a stop; otherwise it's a real host crash.
+              const isUserCancelled = isMemoryCancelled || isStatusCancelled;
 
               if (isUserCancelled) {
+                this.cancellingNativeDownloads.delete(activeRequestId);
                 await this.finishActiveNativeDownload(activeRequestId, {
                   status: 'cancelled',
                   error: '',
@@ -4150,20 +4208,29 @@ class ImgVaultServiceWorker {
                   'warning',
                   'system'
                 );
-                reject(new Error('Download stopped.'));
+                // Use a 'Download stopped.' rejection so the HostPage handler
+                // can distinguish cancellation from real failure via error.message
+                reject(Object.assign(new Error('Download stopped.'), { cancelled: true }));
                 return;
               }
 
+              // If the disconnect was the 1 MB overflow but not a user cancellation,
+              // surface a more helpful truncated message instead of the generic Chrome string.
+              const friendlyMsg = /Error when communicating/i.test(errorMsg)
+                ? 'Native host response too large (progress log overflow). The download may still have completed — check the download folder.'
+                : errorMsg;
+
+              this.cancellingNativeDownloads.delete(activeRequestId);
               await this.finishActiveNativeDownload(activeRequestId, {
                 status: 'failed',
-                error: errorMsg,
+                error: friendlyMsg,
                 lastMessage: this.summarizeNativeDownloadMessage(
-                  errorMsg,
+                  friendlyMsg,
                   'Native host disconnected unexpectedly.'
                 ),
               });
-              await this.appendNativeDownloadLog(activeRequestId, errorMsg, 'error', 'system');
-              reject(new Error(errorMsg));
+              await this.appendNativeDownloadLog(activeRequestId, friendlyMsg, 'error', 'system');
+              reject(new Error(friendlyMsg));
             })().catch((disconnectError) => {
               reject(disconnectError);
             });
