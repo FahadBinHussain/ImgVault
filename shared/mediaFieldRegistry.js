@@ -221,6 +221,13 @@ export function hasAnyVideoProviderLink(item = {}) {
   );
 }
 
+const THREE_D_EXT_RE = /\.(glb|gltf|obj|fbx|stl|spz|3mf|usdz|usd|blend|dae|ply|abc|bvh)$/i;
+function is3DItem(item = {}) {
+  const name = String(item?.fileName || '').toLowerCase();
+  const type = String(item?.fileType || '').toLowerCase();
+  return THREE_D_EXT_RE.test(name) || type.startsWith('model/') || type === 'model/gltf-binary' || type === 'model/gltf+json';
+}
+
 export function getMediaItemKind(item = {}) {
   if (isSystemMediaItem(item)) return MEDIA_KIND_SYSTEM;
   const explicitKind = typeof item?.kind === 'string' ? item.kind.trim().toLowerCase() : '';
@@ -237,7 +244,7 @@ export function getMediaItemKind(item = {}) {
   }
 
   if (isTruthyFlag(item?.isLink) || item?.linkUrl) return MEDIA_KIND_LINK;
-  if (item?.spzUrl) return MEDIA_KIND_SCENE;
+  if (is3DItem(item) || item?.spzUrl) return MEDIA_KIND_SCENE;
   if (fileType.startsWith('image/') && !hasVideoLinks) return MEDIA_KIND_IMAGE;
   if (
     isTruthyFlag(item?.isVideo) ||

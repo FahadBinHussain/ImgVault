@@ -1281,10 +1281,10 @@ export default function GalleryPage() {
       const selectedServices = filterUploadServicesByKeys(configuredServices, uploadData.selectedHostKeys);
       if (configuredServices.length === 0) throw new Error('No 3D host is configured (need UDrop or TeraBox).');
       if (selectedServices.length === 0) throw new Error('Select at least one 3D host (UDrop/TeraBox).');
-      const pendingMeta = { ...uploadData };
+      const pendingMeta = { ...uploadData, kind: 'scene', isVideo: false, fileType: uploadData.fileType || 'model/gltf-binary', fileMimeType: uploadData.fileType || 'model/gltf-binary' };
       delete pendingMeta.fileBlob;
       delete pendingMeta.file;
-      const pendingReservation = await sendMessage('createPendingUpload', { ...pendingMeta, fileName: uploadData.fileName || 'model.glb', isVideo: true }).catch(async (err) => {
+      const pendingReservation = await sendMessage('createPendingUpload', { ...pendingMeta, fileName: uploadData.fileName || 'model.glb', kind: 'scene', isVideo: false }).catch(async (err) => {
         await appendClientUploadLog(`[PENDING UPLOAD] Failed to reserve DB item: ${err.message || String(err)}`, 'error');
         return null;
       });
