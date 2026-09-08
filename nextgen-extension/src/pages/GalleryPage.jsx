@@ -4346,21 +4346,9 @@ export default function GalleryPage() {
         >
           <div className="h-[calc(100vh-11rem)] min-h-0 overflow-hidden">
             {!uploadImageData ? (
-              <div className="space-y-4 h-full overflow-y-auto pr-2">
-                <div className={`rounded-[var(--radius-box)] border p-3 flex items-center justify-between gap-3 ${is3DMode ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-base-300 bg-base-200'}`}>
-                  <div className="flex items-center gap-2">
-                    <motion.div animate={{ rotate: is3DMode ? 360 : 0 }} transition={{ duration: 0.6, ease: 'easeInOut' }}><Box className={`h-5 w-5 ${is3DMode ? 'text-cyan-500' : 'text-base-content/40'}`} /></motion.div>
-                    <div>
-                      <p className="text-sm font-medium text-base-content">3D model mode</p>
-                      <p className="text-xs text-base-content/60">{is3DMode ? 'GLB/GLTF/OBJ/FBX/STL → UDrop/TeraBox (direct XHR)' : 'Toggle on for 3D models (.glb, .obj, .fbx, .stl)'}</p>
-                    </div>
-                    <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold ${is3DMode ? 'bg-cyan-500 text-white' : 'bg-base-300 text-base-content/60'}`}>{is3DMode ? 'ON' : 'OFF'}</span>
-                  </div>
-                  <label className="relative inline-flex cursor-pointer items-center">
-                    <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) setSelectedUploadHostKeys((prev) => { const f = prev.filter((k) => ['udrop','terabox'].includes(k)); return f.length ? f : ['udrop']; }); }} className="peer sr-only" />
-                    <span className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
-                  </label>
-                </div>
+              <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,36%)_1fr] gap-6 h-full min-h-0">
+                <div className="min-h-0 xl:pr-2 xl:overflow-y-auto">
+                  <div className="space-y-4">
                 {is3DMode && (
                   <div className="rounded-[var(--radius-box)] border border-cyan-500/20 bg-cyan-500/5 p-4 space-y-3">
                     <p className="text-sm font-semibold text-cyan-700 flex items-center gap-2"><Box className="w-4 h-4" /> GSplat scene — needs 3 files (.spz + texture .webp + config .json) — uses UDrop/TeraBox direct</p>
@@ -4440,6 +4428,48 @@ export default function GalleryPage() {
                     />
                   </div>
                 </label>
+                  </div>
+                </div>
+                <div className="min-h-0 space-y-4 overflow-y-auto pr-2" style={{ scrollbarGutter: 'stable' }}>
+                  {/* Vault and host controls - visible even before file pick */}
+                  {!vaultLockedForUpload && (
+                  <div className={`rounded-[var(--radius-box)] border transition-colors ${uploadToVault ? 'border-primary/40 bg-primary/5' : 'border-base-300 bg-base-200'}`}>
+                    <label className="flex cursor-pointer items-center justify-between gap-4 p-4 select-none">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <LockKeyhole className={`h-4 w-4 ${uploadToVault ? 'text-primary' : 'text-base-content/40'}`} />
+                          <p className="text-sm font-medium text-base-content">Upload to Secret Vault</p>
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-base-content/60">{uploadToVault ? 'Encrypted before upload — stored as an opaque blob on udrop. Needs the vault unlocked.' : 'Encrypts the file and stores it hidden in the Secret Vault.'}</p>
+                      </div>
+                      <input type="checkbox" checked={uploadToVault} onChange={(e) => setUploadToVault(e.target.checked)} disabled={uploading} className="peer sr-only" />
+                      <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${uploadToVault ? 'bg-primary' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${uploadToVault ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
+                    </label>
+                  </div>
+                  )}
+                  {!uploadToVault && (
+                    <div className={`rounded-[var(--radius-box)] border transition-colors ${is3DMode ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-base-300 bg-base-200'}`}>
+                      <label className="flex cursor-pointer items-center justify-between gap-4 p-4 select-none">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <motion.div animate={{ rotate: is3DMode ? 360 : 0 }} transition={{ duration: 0.6, ease: 'easeInOut' }}><Box className={`h-4 w-4 ${is3DMode ? 'text-cyan-500' : 'text-base-content/40'}`} /></motion.div>
+                            <p className="text-sm font-medium text-base-content">3D model</p>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${is3DMode ? 'bg-cyan-500 text-white' : 'bg-base-300 text-base-content/60'}`}>{is3DMode ? 'ON' : 'OFF'}</span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-base-content/60">{is3DMode ? 'Upload .glb/.gltf/.obj/.fbx/.stl etc to UDrop/TeraBox via direct XHR (no 64MiB limit).' : 'Switch on to upload 3D models (.glb, .obj, .fbx, .stl, .spz).'}</p>
+                        </div>
+                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) setSelectedUploadHostKeys((prev) => { const f = prev.filter((k) => ['udrop','terabox'].includes(k)); return f.length ? f : ['udrop']; }); }} disabled={uploading} className="peer sr-only" />
+                        <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
+                      </label>
+                    </div>
+                  )}
+                  {!uploadToVault && (
+                    <UploadHostSelector services={configuredUploadServices} selectedKeys={selectedUploadHostKeys} onChange={setSelectedUploadHostKeys} disabled={uploading} emptyMessage={is3DMode ? 'No 3D hosts configured. Add UDrop keys or log into TeraBox (cookie auto-read).' : uploadImageData?.isVideo ? 'No video hosts are configured. Add Filemoon or UDrop keys in Settings.' : 'No image hosts are configured. Add Pixvid or ImgBB API keys in Settings.'} />
+                  )}
+                  {uploadToVault && (
+                    <UploadHostSelector services={getVaultBlobHostServices()} selectedKeys={selectedVaultHostKeys} onChange={setSelectedVaultHostKeys} disabled={uploading} title="Vault blob host" description="Where the encrypted .bin blob is stored. Select one or more." defaultAll={false} emptyMessage="No vault blob hosts available." />
+                  )}
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,36%)_1fr] gap-6 h-full min-h-0">
