@@ -4975,6 +4975,31 @@ class ImgVaultServiceWorker {
         console.warn('[getSceneDirectUrl] UDrop page parse failed:', e.message);
       }
     }
+    // Terabox dlinks expire in 8h (sign in URL) - try to refresh via API if this is a Terabox file
+    if (fetchUrl.includes('terabox.com') && mediaId) {
+      try {
+        const fetchedItem = await this.storage.getImageById(mediaId);
+        const vHosts = fetchedItem?.extraMetadata?.videoHosts || fetchedItem?.videoHosts || {};
+        const tb = vHosts?.terabox || {};
+        const fileId = tb.fileId || tb.filecode || '';
+        const filename = tb.filename || fetchedItem?.fileName || '';
+        if (fileId) {
+          const settings = await this.getMergedVideoHostSettings().catch(() => ({}));
+          const cookie = settings?.teraboxCookie || '';
+          // Try to get fresh dlink - cookie may be auto-read from browser session via TeraBoxUploader
+          let fresh = null;
+          try {
+            fresh = await resolveTeraBoxPlaybackUrl(cookie, fileId, filename);
+          } catch {}
+          if (fresh && fresh !== fetchUrl) {
+            console.log('[getSceneDirectUrl] Refreshed Terabox dlink for', mediaId);
+            fetchUrl = fresh;
+          }
+        }
+      } catch (e) {
+        console.warn('[getSceneDirectUrl] Terabox refresh failed:', e.message);
+      }
+    }
     return fetchUrl;
   }
 
