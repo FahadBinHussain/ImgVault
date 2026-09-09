@@ -170,6 +170,73 @@ async function fetchJsTokenViaHiddenTab(timeoutMs = 15000) {
   return result === false ? '' : (result || '');
 }
 
+/**
+ * Fetch page-context tokens for write ops (filemanager delete): jsToken +
+ * bdstoken + dp-logid, scraped from the /main page's templateData in a hidden
+ * tab. Read-only /api/list works with jsToken alone, but filemanager rejects
+ * calls without bdstoken (errno -6). Cached ~12h like jsToken.
+ * @returns {Promise<{jsToken:string,bdstoken:string,dpLogid:string}>}
+ */
+async function fetchTeraBoxPageContext(cookie, forceFresh = false) {
+  const empty = { jsToken: '', bdstoken: '', dpLogid: '' };
+  if (!forceFresh) {
+    try {
+      const cached = await chrome.storage.local.get(['teraboxPageCtx', 'teraboxPageCtxAt']);
+      if (cached?.teraboxPageCtx && Date.now() - (cached.teraboxPageCtxAt || 0) < 1000 * 60 * 60 * 12) {
+        return { ...empty, ...cached.teraboxPageCtx };
+      }
+    } catch (_) {}
+  }
+  if (typeof chrome === 'undefined' || !chrome.tabs?.create || !chrome.scripting?.executeScript) return empty;
+  let tabId = null;
+  try {
+    const tab = await chrome.tabs.create({ url: `${TERABOX_TOKEN_BASE}/main`, active: false, pinned: false });
+    tabId = tab.id;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    let ready = false;
+    for (let i = 0; i < 50 && !ready; i++) {
+      await sleep(300);
+      try {
+        const done = await new Promise((resolve) => {
+          chrome.tabs.get(tabId, (t) => {
+            if (chrome.runtime.lastError || !t) return resolve(false);
+            resolve(t.status === 'complete');
+          });
+        });
+        if (done) ready = true;
+      } catch (_) {}
+    }
+    if (!ready) await sleep(800);
+    let ctx = empty;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({
+          jsToken: window.jsToken || '',
+          html: document.documentElement.outerHTML.slice(0, 200000),
+        }),
+      });
+      const payload = results?.[0]?.result || {};
+      const html = String(payload.html || '');
+      const js = String(payload.jsToken || '');
+      const bd = html.match(/"bdstoken"\s*:\s*"([^"]+)"/)?.[1] || '';
+      const dp = html.match(/dp-logid[=:]([^&"'\s<>]+)/)?.[1] || '';
+      const fnTok = html.match(/fn\("([A-Za-z0-9]{10,})"\)/)?.[1] || '';
+      ctx = { jsToken: js || fnTok, bdstoken: bd, dpLogid: dp };
+    } catch (_) {}
+    if (ctx.jsToken || ctx.bdstoken) {
+      try { await chrome.storage.local.set({ teraboxPageCtx: ctx, teraboxPageCtxAt: Date.now() }); } catch (_) {}
+    }
+    return ctx;
+  } catch (_) {
+    return empty;
+  } finally {
+    if (tabId != null) {
+      try { await chrome.tabs.remove(tabId); } catch (_) {}
+    }
+  }
+}
+
 async function fetchJsToken(cookie, forceFresh = false) {
   // hidden tab avoids Sec-Fetch-* gate. fetch() from a chrome-extension page
   // always sends Sec-Fetch-Site: cross-site etc. and TeraBox redirects that
@@ -554,16 +621,20 @@ export async function deleteTeraBoxFiles(explicitCookie, paths) {
   const auth = await authorizeTeraBox(explicitCookie);
   if (!auth) throw new Error('No TeraBox cookie. Log in to TeraBox or set the cookie in Settings.');
   // NOTE: /api/list only works on the dm base for this account (www returns
-  // errno -6 — verified 2.11.8). filemanager goes to dm first for the same
-  // reason, falling back to www only if dm fails. same paths both times, so
-  // the fallback can never touch a different file.
-  const postDelete = async (base, jsToken) => {
+  // errno -6 — verified 2.11.8). filemanager is tried on dm first, www as
+  // fallback. same paths every attempt, so retries can never touch a
+  // different file. write ops additionally send bdstoken + dp-logid from the
+  // /main page context — filemanager rejects calls without them (errno -6).
+  const trace = [];
+  const postDelete = async (base, ctx) => {
     const qp = new URLSearchParams({
       app_id: '250528',
       web: '1',
       channel: 'dubox',
       clienttype: '0',
-      ...(jsToken ? { jsToken } : {}),
+      ...(ctx.jsToken ? { jsToken: ctx.jsToken } : {}),
+      ...(ctx.bdstoken ? { bdstoken: ctx.bdstoken } : {}),
+      ...(ctx.dpLogid ? { 'dp-logid': ctx.dpLogid } : {}),
       onnest: 'fail',
       opera: 'delete',
     });
@@ -581,17 +652,33 @@ export async function deleteTeraBoxFiles(explicitCookie, paths) {
       body,
     });
     if (!res.ok) throw new Error(`TeraBox delete HTTP ${res.status} on ${base}`);
-    return res.json();
+    const json = await res.json();
+    // Sanitized trace: param presence + server errno only, no secrets.
+    trace.push(`${base.replace('https://', '')} errno=${json?.errno ?? '?'}${json?.errmsg ? ` (${String(json.errmsg).slice(0, 80)})` : ''} [jsToken:${ctx.jsToken ? 'y' : 'n'} bdstoken:${ctx.bdstoken ? 'y' : 'n'} dp-logid:${ctx.dpLogid ? 'y' : 'n'}]`);
+    try { console.log(`[teraBoxApi] delete attempt: ${trace[trace.length - 1]}`); } catch (_) {}
+    return json;
   };
   const stripToken = (t) => (typeof t === 'string' && t.includes('|') ? t.slice(0, t.indexOf('|')) : t);
-  let json = await postDelete(TERABOX_API_BASE, auth.jsToken);
-  if (json && json.errno === 450016) {
-    json = await postDelete(TERABOX_API_BASE, stripToken(await fetchJsToken(auth.cookie, true)));
-  }
-  if (json && json.errno !== 0 && json.errno !== 450016) {
-    const fallback = await postDelete(TERABOX_TOKEN_BASE, auth.jsToken);
-    if (fallback && fallback.errno === 0) return true;
-    throw new Error(`TeraBox delete failed (errno=${json.errno} on dm, errno=${fallback?.errno ?? '?'} on www). Nothing deleted — files are untouched.`);
+  const cachedCtx = await fetchTeraBoxPageContext(auth.cookie, false);
+  const baseCtx = {
+    jsToken: cachedCtx.jsToken || stripToken(auth.jsToken),
+    bdstoken: cachedCtx.bdstoken,
+    dpLogid: cachedCtx.dpLogid,
+  };
+  let json = await postDelete(TERABOX_API_BASE, baseCtx);
+  if (json && json.errno !== 0) {
+    const freshCtx = await fetchTeraBoxPageContext(auth.cookie, true);
+    const retryCtx = {
+      jsToken: freshCtx.jsToken || stripToken(await fetchJsToken(auth.cookie, true)) || baseCtx.jsToken,
+      bdstoken: freshCtx.bdstoken || baseCtx.bdstoken,
+      dpLogid: freshCtx.dpLogid || baseCtx.dpLogid,
+    };
+    json = await postDelete(TERABOX_API_BASE, retryCtx);
+    if (json && json.errno !== 0) {
+      const fallback = await postDelete(TERABOX_TOKEN_BASE, retryCtx);
+      if (fallback && fallback.errno === 0) return true;
+      throw new Error(`TeraBox delete failed (${trace.join(' | ')}). Nothing deleted — files are untouched. If this persists, paste the console lines starting with [teraBoxApi].`);
+    }
   }
   if (!json || json.errno !== 0) throw new Error(`TeraBox delete error: errno=${json?.errno ?? '?'}. Nothing deleted.`);
   return true;
