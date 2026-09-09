@@ -2836,9 +2836,19 @@ export default function ResolvePage() {
                     );
                   }
 
-                  // ---- Normal DB scene items ----
+                  // ---- Normal DB scene items — both files are part of 1 scene (2.12.58) ----
                   const title = item.pageTitle || item.fileName || item.description || 'Untitled';
-                  const sceneUrl = item.spzUrl || item.textureUrl || '';
+                  const spzUrl = item.spzUrl || '';
+                  const texUrl = item.textureUrl || '';
+                  const sceneUrl = spzUrl || texUrl || '';
+                  const hostLabel = sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop';
+                  const spzMatched = entry.spzMatched || null;
+                  const texMatched = entry.texMatched || null;
+                  const spzCode = entry.spzCode || entry.spzFid || null;
+                  const texCode = entry.texCode || entry.texFid || null;
+                  const baseName = (u) => String(u || '').split('/').pop().split('?')[0].split('#')[0] || '';
+                  const spzName = baseName(spzUrl) || item.fileName || (spzCode ? String(spzCode) : 'spz');
+                  const texName = baseName(texUrl) || (texCode ? String(texCode) : 'texture');
 
                   return (
                     <article
@@ -2875,22 +2885,50 @@ export default function ResolvePage() {
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/55">
                             {item.fileName && <span className="truncate">{item.fileName}</span>}
                             {formatDate(item.createdAt || item.internalAddedTimestamp)}
-                            {sceneUrl && (
-                              <a
-                                href={sceneUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-primary hover:underline"
-                              >
-                                UDrop <ExternalLink className="h-3 w-3" />
+                            {spzUrl && (
+                              <a href={spzUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                                SPZ <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                            {texUrl && (
+                              <a href={texUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                                Image <ExternalLink className="h-3 w-3" />
                               </a>
                             )}
                           </div>
                         </div>
 
-                        {status === 'found' && matchedFile && (
+                        {/* Both files are 1 scene — show each with its own status so hosts stay symmetric (2.12.58) */}
+                        {(status === 'found' || status === 'missing' || status === 'noUrl') && (spzUrl || texUrl) && (
+                          <div className="space-y-2 text-xs">
+                            {spzUrl && (
+                              <div className={`flex items-center justify-between rounded border px-2 py-1 ${status === 'found' && (spzMatched || !spzCode) ? 'border-success/20 bg-success/5 text-success' : status === 'missing' && !spzMatched ? 'border-error/20 bg-error/5 text-error' : status === 'noUrl' ? 'border-warning/20 bg-warning/5 text-warning' : 'border-base-300 bg-base-200/40 text-base-content/70'}`}>
+                                <span className="truncate font-mono text-[11px]">{spzName}</span>
+                                <span className="ml-2 shrink-0 text-[10px] font-semibold uppercase tracking-wider">{status === 'found' && (spzMatched || !spzCode) ? 'SPZ found' : status === 'missing' && !spzMatched ? 'SPZ missing' : status === 'noUrl' ? `SPZ → ${hostLabel} missing` : 'SPZ'}</span>
+                              </div>
+                            )}
+                            {texUrl && (
+                              <div className={`flex items-center justify-between rounded border px-2 py-1 ${status === 'found' && (texMatched || !texCode) ? 'border-success/20 bg-success/5 text-success' : status === 'missing' && !texMatched ? 'border-error/20 bg-error/5 text-error' : status === 'noUrl' ? 'border-warning/20 bg-warning/5 text-warning' : 'border-base-300 bg-base-200/40 text-base-content/70'}`}>
+                                <span className="truncate font-mono text-[11px]">{texName}</span>
+                                <span className="ml-2 shrink-0 text-[10px] font-semibold uppercase tracking-wider">{status === 'found' && (texMatched || !texCode) ? 'Image found' : status === 'missing' && !texMatched ? 'Image missing' : status === 'noUrl' ? `Image → ${hostLabel} missing` : 'Image'}</span>
+                              </div>
+                            )}
+                            {status === 'missing' && (
+                              <div className="text-[11px] text-base-content/50">
+                                {hostLabel} is missing {(!spzMatched && spzUrl ? 'SPZ' : '') + (!spzMatched && !texMatched && spzUrl && texUrl ? ' + ' : '') + (!texMatched && texUrl ? 'Image' : '') || 'a file'} for this scene. Fix re-uploads the pair.
+                              </div>
+                            )}
+                            {status === 'noUrl' && (
+                              <div className="text-[11px] text-base-content/50">
+                                Not on {hostLabel} — SPZ + Image live on the other host. Fix copies both files to {hostLabel}.
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {status === 'found' && matchedFile && !spzUrl && !texUrl && (
                           <div className="text-xs text-base-content/70">
-                            <div className="font-medium text-success">UDrop file: {matchedFile.name || matchedFile.file_id}</div>
+                            <div className="font-medium text-success">{hostLabel} file: {matchedFile.name || matchedFile.file_id || matchedFile.server_filename || matchedFile.fs_id}</div>
                             {matchedFile.short_url && (
                               <a href={matchedFile.short_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                                 {matchedFile.short_url}
@@ -2899,33 +2937,42 @@ export default function ResolvePage() {
                           </div>
                         )}
 
-                        {status === 'missing' && (codes || []).length > 0 && (
+                        {status === 'missing' && (codes || []).length > 0 && !spzUrl && !texUrl && (
                           <div className="text-xs text-base-content/70">
                             <div className="font-medium text-error">Broken scene links:</div>
                             <div className="font-mono">{codes.join(', ')}</div>
-                            <div className="mt-1 text-base-content/50">These files are no longer on UDrop. They may have been deleted or the upload may have failed.</div>
+                            <div className="mt-1 text-base-content/50">These files are no longer on {hostLabel}. They may have been deleted or the upload may have failed.</div>
                           </div>
                         )}
                       </div>
 
                       <div className="flex flex-col justify-between gap-3 sm:w-52">
                         <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-200/60 px-3 py-2 text-xs text-base-content/65">
-                          {status === 'missing' && `Needs re-upload to ${sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'}`}
-                          {status === 'found' && `Verified on ${sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'}`}
-                          {status === 'noUrl' && 'No scene URL stored'}
+                          {status === 'missing' && `Needs re-upload to ${hostLabel}`}
+                          {status === 'found' && `Verified on ${hostLabel} — SPZ + Image`}
+                          {status === 'noUrl' && `Not on ${hostLabel} — SPZ + Image missing`}
                         </div>
 
                         <div className="flex flex-col gap-2">
-                          {sceneUrl && (
+                          {spzUrl && texUrl ? (
+                            <>
+                              <Button variant="outline" className="h-9 justify-center gap-2 text-sm" onClick={() => window.open(spzUrl, '_blank')}>
+                                <ExternalLink className="h-4 w-4" /> Open SPZ
+                              </Button>
+                              <Button variant="outline" className="h-9 justify-center gap-2 text-sm" onClick={() => window.open(texUrl, '_blank')}>
+                                <ExternalLink className="h-4 w-4" /> Open Image
+                              </Button>
+                            </>
+                          ) : sceneUrl ? (
                             <Button
                               variant="outline"
                               className="h-9 justify-center gap-2 text-sm"
                               onClick={() => window.open(sceneUrl, '_blank')}
                             >
                               <ExternalLink className="h-4 w-4" />
-                              Open UDrop
+                              Open {hostLabel}
                             </Button>
-                          )}
+                          ) : null}
                           {(status === 'noUrl' || status === 'missing') && (
                             <Button
                               variant="primary"

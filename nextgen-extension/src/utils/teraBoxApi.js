@@ -789,47 +789,76 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
       links = { ...merged, ...links };
     } catch (_) {}
     const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
+    // Both files are part of 1 scene — treat spz + texture as a pair (2.12.58)
+    const spzFid = extractTeraBoxFileId(item) || teraBoxFsIdFromUrl(item.spzUrl) || '';
+    const texFid = teraBoxFsIdFromUrl(item.textureUrl) || String(item.textureFileId || item.extraMetadata?.sceneFiles?.texture?.fileId || '').trim();
+    const spzName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
+    const texName = baseNameOf(item.textureUrl);
+    // Also consider sceneFiles for texture names
+    const sceneTexName = String(item.extraMetadata?.sceneFiles?.texture?.filename || '').trim();
+    const effectiveTexName = texName || sceneTexName;
+    // Keep legacy single-file vars for dbSets
+    const fileId = spzFid;
+    const fileName = spzName;
+    collectTextureRefs(item, dbIds, dbNames);
+    if (texFid) dbIds.add(String(texFid));
+    if (effectiveTexName) dbNames.add(effectiveTexName);
+    if (spzFid) dbIds.add(String(spzFid));
+    if (spzName) dbNames.add(spzName);
+
     const hasLink = Boolean(
       links.watchUrl || links.directUrl || links.url ||
       extraLinks.watchUrl || extraLinks.directUrl || extraLinks.url ||
       item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl ||
-      item.spzUrl
+      item.spzUrl || item.textureUrl
     );
-    const fileId = extractTeraBoxFileId(item);
-    const fileName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
-    collectTextureRefs(item, dbIds, dbNames);
-    // Host-specific ref: generic spzUrl/fileName also match foreign-host scenes,
-    // which must land in noUrl (never uploaded HERE), not missing. Missing is
-    // reserved for scenes linked to terabox whose file is gone (2.12.56 — the
-    // old path pushed codeless missing entries that crashed the render).
+    // Host-specific ref: generic spzUrl/textureUrl also match foreign-host scenes,
+    // which must land in noUrl (never uploaded HERE), not missing.
     const hasTeraboxRef = Boolean(
       links.watchUrl || links.directUrl || links.url ||
       extraLinks.watchUrl || extraLinks.directUrl || extraLinks.url ||
       item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl ||
-      fileId
+      spzFid || texFid
     );
 
-    if (!hasLink && !fileId && !fileName) {
-      noUrl.push({ item, codes: [] });
+    if (!hasLink && !spzFid && !texFid && !spzName && !effectiveTexName) {
+      noUrl.push({ item, codes: [], spzFid: spzFid || null, texFid: texFid || null, spzMatched: null, texMatched: null });
       continue;
     }
 
-    let matchedFile = null;
+    let spzMatched = null;
+    let texMatched = null;
     if (listingSucceeded) {
-      matchedFile = (fileId && fileMap.get(String(fileId))) || (fileName && fileMap.get(fileName)) || null;
+      if (spzFid) spzMatched = fileMap.get(String(spzFid)) || null;
+      if (!spzMatched && spzName) spzMatched = fileMap.get(spzName) || null;
+      if (!spzMatched && item.spzUrl) {
+        const fidFromSpzUrl = teraBoxFsIdFromUrl(item.spzUrl);
+        if (fidFromSpzUrl) spzMatched = fileMap.get(String(fidFromSpzUrl)) || spzMatched;
+      }
+      if (texFid) texMatched = fileMap.get(String(texFid)) || null;
+      if (!texMatched && effectiveTexName) texMatched = fileMap.get(effectiveTexName) || null;
+      if (!texMatched && item.textureUrl) {
+        const fidFromTexUrl = teraBoxFsIdFromUrl(item.textureUrl);
+        if (fidFromTexUrl) texMatched = fileMap.get(String(fidFromTexUrl)) || texMatched;
+      }
     }
 
-    if (fileId) dbIds.add(String(fileId));
-    if (fileName) dbNames.add(fileName);
+    const needsSpz = Boolean(spzFid || spzName || item.spzUrl);
+    const needsTex = Boolean(texFid || effectiveTexName || item.textureUrl);
+    const spzOk = !needsSpz || Boolean(spzMatched);
+    const texOk = !needsTex || Boolean(texMatched);
+    const allOk = spzOk && texOk;
+    const anyOk = Boolean(spzMatched || texMatched);
+    const matchedFile = spzMatched || texMatched || null;
 
-    if (matchedFile) {
-      found.push({ item, matchedFile });
+    if (allOk && anyOk) {
+      found.push({ item, matchedFile, codes: [], spzFid: spzFid || null, texFid: texFid || null, spzMatched, texMatched });
     } else if (!listingSucceeded) {
-      found.push({ item, matchedFile: null });
+      found.push({ item, matchedFile: null, codes: [], spzFid: spzFid || null, texFid: texFid || null, spzMatched, texMatched });
     } else if (hasTeraboxRef) {
-      missing.push({ item, codes: [] });
+      missing.push({ item, codes: [], spzFid: spzFid || null, texFid: texFid || null, spzMatched, texMatched });
     } else {
-      noUrl.push({ item, codes: [] });
+      noUrl.push({ item, codes: [], spzFid: spzFid || null, texFid: texFid || null, spzMatched, texMatched });
     }
   }
 

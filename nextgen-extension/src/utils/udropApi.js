@@ -383,26 +383,42 @@ export async function checkSceneIntegrity(items, allItems, accessToken, accountI
   const dbCodes = new Set();
 
   for (const item of items) {
-    const sceneUrls = [item.spzUrl, item.textureUrl].filter(Boolean);
-    const codes = sceneUrls.map(extractUdropCode).filter(Boolean);
+    const spzCode = extractUdropCode(item.spzUrl);
+    const texCode = extractUdropCode(item.textureUrl);
+    const codes = [spzCode, texCode].filter(Boolean);
     const uniqueCodes = [...new Set(codes)];
 
     if (!uniqueCodes.length) {
-      noUrl.push({ item, codes: [] });
+      noUrl.push({ item, codes: [], spzCode: spzCode || null, texCode: texCode || null, spzMatched: null, texMatched: null });
       continue;
     }
 
     uniqueCodes.forEach((c) => dbCodes.add(c));
 
-    let matchedFile = null;
+    let spzMatched = null;
+    let texMatched = null;
     if (listingSucceeded) {
-      matchedFile = uniqueCodes.map((code) => udropMap.get(code)).find(Boolean) || null;
+      if (spzCode) spzMatched = udropMap.get(spzCode) || null;
+      if (texCode) texMatched = udropMap.get(texCode) || null;
     }
 
-    if (matchedFile) {
-      found.push({ item, codes: uniqueCodes, matchedFile });
+    // Both files are part of 1 scene — require both when both codes exist (2.12.58)
+    const needsSpz = Boolean(spzCode);
+    const needsTex = Boolean(texCode);
+    const spzOk = !needsSpz || Boolean(spzMatched);
+    const texOk = !needsTex || Boolean(texMatched);
+    const allOk = spzOk && texOk;
+    const anyOk = Boolean(spzMatched || texMatched);
+    // Keep legacy matchedFile for callers that only read one
+    const matchedFile = spzMatched || texMatched || null;
+
+    if (allOk && anyOk) {
+      found.push({ item, codes: uniqueCodes, matchedFile, spzCode: spzCode || null, texCode: texCode || null, spzMatched, texMatched });
+    } else if (!listingSucceeded) {
+      found.push({ item, matchedFile: null, codes: uniqueCodes, spzCode: spzCode || null, texCode: texCode || null, spzMatched, texMatched });
     } else {
-      missing.push({ item, codes: uniqueCodes });
+      // Partial: one file missing counts as missing so both hosts stay symmetric
+      missing.push({ item, codes: uniqueCodes, matchedFile, spzCode: spzCode || null, texCode: texCode || null, spzMatched, texMatched });
     }
   }
 
