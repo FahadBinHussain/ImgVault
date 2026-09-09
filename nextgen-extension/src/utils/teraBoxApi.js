@@ -731,10 +731,25 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
       return b ? decodeURIComponent(b) : '';
     } catch (_) { return ''; }
   };
+  // TeraBox dlinks embed the file id: ?fid=<vuk>-<app>-<fs_id> — the trailing
+  // numeric segment IS the fs_id (verified against the DB 2026-09-09: the
+  // scene texture dlink ends in the thumbnail's fs_id). This is exact, unlike
+  // basename matching on opaque /file/<hash> dlink paths.
+  const teraBoxFsIdFromUrl = (u) => {
+    try {
+      const m = String(u || '').match(/[?&]fid=([^&#]+)/);
+      if (!m) return '';
+      const parts = decodeURIComponent(m[1]).split('-');
+      const last = parts[parts.length - 1];
+      return /^\d+$/.test(last || '') ? last : '';
+    } catch (_) { return ''; }
+  };
   const collectTextureRefs = (item, idSet, nameSet) => {
     if (!item) return;
     const texNm = baseNameOf(item.textureUrl);
     if (texNm) nameSet.add(texNm);
+    const texFid = teraBoxFsIdFromUrl(item.textureUrl);
+    if (texFid) idSet.add(texFid);
     if (item.textureFileId) idSet.add(String(item.textureFileId));
     const sf = item?.extraMetadata?.sceneFiles || {};
     for (const part of [sf.spz, sf.texture]) {
@@ -756,6 +771,10 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
     const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
     const nm = String(mergedLinks.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
     if (nm) referencedNames.add(nm);
+    for (const u of [mergedLinks.watchUrl, mergedLinks.directUrl, mergedLinks.url, extraLinks.watchUrl, extraLinks.directUrl, extraLinks.url, item.teraboxWatchUrl, item.teraboxDirectUrl, item.teraboxUrl, item.spzUrl]) {
+      const f = teraBoxFsIdFromUrl(u);
+      if (f) referencedIds.add(f);
+    }
     collectTextureRefs(item, referencedIds, referencedNames);
   }
 
