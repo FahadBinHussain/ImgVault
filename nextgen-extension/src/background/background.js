@@ -2396,6 +2396,12 @@ class ImgVaultServiceWorker {
           .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
 
+      case 'getSceneConfig':
+        this.getSceneConfig({ mediaId: request.mediaId })
+          .then(cfg => sendResponse({ success: true, data: cfg }))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+
       default:
         console.warn('Unknown action:', action);
         return false;
@@ -4970,6 +4976,26 @@ class ImgVaultServiceWorker {
       }
     }
     return fetchUrl;
+  }
+
+  async getSceneConfig({ mediaId }) {
+    if (!mediaId) return null;
+    try {
+      const sql = this.storage.ensureNeonReady?.();
+      if (sql) {
+        const rows = await sql`SELECT config_json FROM public.media_items WHERE id = ${mediaId} LIMIT 1`;
+        if (rows?.[0]?.config_json) {
+          const v = rows[0].config_json;
+          return typeof v === 'string' ? JSON.parse(v) : v;
+        }
+      }
+    } catch {}
+    try {
+      const item = await this.storage.getImageById(mediaId);
+      const raw = item?.configJson || item?.extraMetadata?.configJson || item?.extraMetadata?.sceneConfig || item?.extraMetadata?.config_json;
+      if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {}
+    return null;
   }
 
   async handleSceneUpload(data) {

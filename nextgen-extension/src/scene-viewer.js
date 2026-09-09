@@ -176,10 +176,9 @@ try {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         spzBytes = await resp.arrayBuffer();
         fetchedViaDirect = true;
-        // Try to get configJson via small background call (config is tiny)
         try {
-          const cfgResp = await chrome.runtime.sendMessage({ action: 'fetchFile', mediaId: sceneId, url: spzUrl });
-          if (cfgResp?.success && cfgResp.data?.configJson) configJson = cfgResp.data.configJson;
+          const cfgResp = await chrome.runtime.sendMessage({ action: 'getSceneConfig', mediaId: sceneId });
+          if (cfgResp?.success && cfgResp.data) configJson = cfgResp.data;
         } catch {}
       }
     } catch (e) {
