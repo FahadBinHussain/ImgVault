@@ -658,16 +658,16 @@ export default function ResolvePage() {
         if (!item) return false;
         return item.kind === 'scene' || Boolean(item.spzUrl) || String(item.fileName||'').toLowerCase().endsWith('.spz') || String(item.fileType||'').toLowerCase().startsWith('model/');
       });
-      const isUdropScene = (item) => Boolean((item.spzUrl && String(item.spzUrl).includes('udrop.com')) || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop) || Boolean(item.extraMetadata?.videoHosts?.udrop);
-      const isTeraboxScene = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.teraboxFileId || item.videoHosts?.terabox?.watchUrl || item.videoHosts?.terabox?.directUrl || item.videoHosts?.terabox?.url || item.videoHosts?.terabox?.fileId || item.videoHosts?.terabox?.filename || item.extraMetadata?.videoHosts?.terabox);
-      const filteredScenes = tab === 'terabox' ? sceneItems.filter(isTeraboxScene) : sceneItems.filter(isUdropScene);
+      // Symmetry with the video tabs: EVERY scene enters EACH host check, so a
+      // udrop-only scene shows as no-url on the terabox tab and vice versa
+      // (2.12.55). Filtering to already-linked scenes hid cross-host gaps.
       let result = { found: [], missing: [], noUrl: [], extra: [] };
       if (tab === 'udrop') {
         if (!hasText(settings?.udropKey1) || !hasText(settings?.udropKey2)) throw new Error('UDrop keys not configured. Go to Settings.');
         const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
-        result = await checkSceneIntegrity(filteredScenes.length ? filteredScenes : sceneItems.filter(isUdropScene), allItems, auth.access_token, auth.account_id);
+        result = await checkSceneIntegrity(sceneItems, allItems, auth.access_token, auth.account_id);
       } else {
-        result = await checkTeraBoxSceneIntegrity(sceneItems.filter(isTeraboxScene), allItems, settings.teraboxCookie, (p) => {
+        result = await checkTeraBoxSceneIntegrity(sceneItems, allItems, settings.teraboxCookie, (p) => {
           if (seq !== sceneCheckSeqRef.current) return;
           setSceneLoadingMessage(p.phase === 'token' ? 'Resolving TeraBox session…' : `Listing ${p.folder || '/'}… ${p.files} files so far`);
         });
