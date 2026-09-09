@@ -2625,7 +2625,7 @@ export default function ResolvePage() {
 
                           <div className="text-xs text-base-content/70">
                             {isStandaloneTexture
-                              ? `This texture file exists on ${hostLabel} but is not linked to any saved scene. Its .spz is gone or was never uploaded.`
+                              ? `This texture file exists on ${hostLabel} but is not linked to any saved scene. No matching .spz was found — it may be a leftover thumbnail or an unused upload.`
                               : textureFiles.length > 0
                                 ? `This scene group (1 .spz + ${textureFiles.length} texture${textureFiles.length > 1 ? 's' : ''}) exists on ${hostLabel} but is not linked to any saved scene. Config lives in the DB, so only these ${1 + textureFiles.length} host files need cleanup.`
                                 : `This .spz file exists on ${hostLabel} but is not linked to any saved scene in your vault. It might be safe to delete.`}

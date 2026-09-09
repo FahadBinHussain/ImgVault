@@ -720,7 +720,29 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
     if (f.server_filename) fileMap.set(String(f.server_filename), f);
   }
 
-  // Ids/names referenced by ANY item (videos included) never count as scene orphans
+  // Ids/names referenced by ANY item (videos included) never count as scene orphans.
+  // Scene uploads store the companion texture ONLY as textureUrl (+ sizes), so
+  // its basename + saved sceneFiles refs must count too — otherwise every
+  // scene thumbnail shows up as a standalone "extra" (2.12.53).
+  const baseNameOf = (u) => {
+    try {
+      const s = String(u || '').split('?')[0];
+      const b = s.split('/').pop();
+      return b ? decodeURIComponent(b) : '';
+    } catch (_) { return ''; }
+  };
+  const collectTextureRefs = (item, idSet, nameSet) => {
+    if (!item) return;
+    const texNm = baseNameOf(item.textureUrl);
+    if (texNm) nameSet.add(texNm);
+    if (item.textureFileId) idSet.add(String(item.textureFileId));
+    const sf = item?.extraMetadata?.sceneFiles || {};
+    for (const part of [sf.spz, sf.texture]) {
+      if (!part) continue;
+      if (part.fileId) idSet.add(String(part.fileId));
+      if (part.filename) nameSet.add(String(part.filename));
+    }
+  };
   const referencedIds = new Set();
   const referencedNames = new Set();
   for (const item of allItems || []) {
@@ -734,6 +756,7 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
     const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
     const nm = String(mergedLinks.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
     if (nm) referencedNames.add(nm);
+    collectTextureRefs(item, referencedIds, referencedNames);
   }
 
   const dbIds = new Set();
@@ -755,6 +778,7 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
     );
     const fileId = extractTeraBoxFileId(item);
     const fileName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
+    collectTextureRefs(item, dbIds, dbNames);
 
     if (!hasLink && !fileId && !fileName) {
       noUrl.push({ item });

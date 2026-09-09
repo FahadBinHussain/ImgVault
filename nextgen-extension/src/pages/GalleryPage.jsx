@@ -1422,7 +1422,15 @@ export default function GalleryPage() {
         const id = res?.id || res;
         const spzUrl = spzRes.directUrl || spzRes.url || spzRes.watchUrl || payload.spzDirectUrl || '';
         const textureUrl = texRes.directUrl || texRes.url || texRes.watchUrl || payload.textureDirectUrl || '';
-        try { await sendMessage('updateImage', { id, spzUrl, textureUrl, configJson: sceneConfig ? JSON.stringify(sceneConfig) : null, kind: 'scene', fileType: 'model/spz', spzFileSize: spzFile.size, textureFileSize: textureFile.size }); } catch {}
+        // Persist host file refs for the resolve integrity checks (merge-safe:
+        // buildExtraSeed keeps existing extra keys). Without these the scene
+        // thumbnail shows up as a standalone "extra" orphan (2.12.53).
+        const sceneFiles = {
+          host: primarySvc.key,
+          spz: { fileId: spzRes.fileId || spzRes.filecode || '', filename: spzFile.name },
+          texture: { fileId: texRes.fileId || texRes.filecode || '', filename: texRes.filename || textureFile.name },
+        };
+        try { await sendMessage('updateImage', { id, spzUrl, textureUrl, configJson: sceneConfig ? JSON.stringify(sceneConfig) : null, kind: 'scene', fileType: 'model/spz', spzFileSize: spzFile.size, textureFileSize: textureFile.size, extraMetadata: { sceneFiles } }); } catch {}
         return { id, spzUrl, textureUrl };
       });
       await appendClientUploadLog(`Scene saved ${saved.id||''}`, 'success');
