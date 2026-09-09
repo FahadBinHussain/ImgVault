@@ -138,6 +138,10 @@ export default function ResolvePage() {
   const [sceneKeysConfigured, setSceneKeysConfigured] = useState(false);
   const [sceneSubTab, setSceneSubTab] = useState('udrop'); // 'udrop' | 'terabox'
   const [sceneLoadingMessage, setSceneLoadingMessage] = useState(null);
+  // Empty results are valid (no scenes yet) — this flag, not result emptiness,
+  // decides whether the auto-check still needs to run. Otherwise an all-empty
+  // result retriggers the check forever ("stuck loading").
+  const [sceneHasChecked, setSceneHasChecked] = useState(false);
   const sceneCheckSeqRef = useRef(0); // latest scene check wins; stale runs discard
 
   // ---- Filemoon integrity check state ----
@@ -668,21 +672,25 @@ export default function ResolvePage() {
       setSceneLoadingMessage(null);
       setSceneError(err.message || String(err));
     } finally {
-      if (seq === sceneCheckSeqRef.current) setSceneLoading(false);
+      if (seq === sceneCheckSeqRef.current) {
+        setSceneLoading(false);
+        setSceneHasChecked(true);
+      }
     }
   }, [settings, sendMessage, checkSceneKeysConfigured, sceneSubTab]);
 
   useEffect(() => {
-    if (activeTab === 'scenes' && !sceneLoading && !sceneError && sceneIntegrity.found.length === 0 && sceneIntegrity.missing.length === 0 && sceneIntegrity.noUrl.length === 0 && sceneIntegrity.extra.length === 0) {
+    if (activeTab === 'scenes' && !sceneLoading && !sceneHasChecked) {
       runSceneIntegrityCheck();
     }
-  }, [activeTab, sceneLoading, sceneError, sceneIntegrity, runSceneIntegrityCheck]);
+  }, [activeTab, sceneLoading, sceneHasChecked, runSceneIntegrityCheck]);
 
   useEffect(() => {
     if (activeTab === 'scenes') {
       setSceneIntegrity({ found: [], missing: [], noUrl: [], extra: [] });
       setSceneError(null);
       setSceneLoadingMessage(null);
+      setSceneHasChecked(false);
       setNotice(null);
     }
   }, [sceneSubTab, activeTab]);
