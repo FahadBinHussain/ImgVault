@@ -656,7 +656,14 @@ export default function ResolvePage() {
     if (activeTab === 'scenes' && !sceneLoading && !sceneError && sceneIntegrity.found.length === 0 && sceneIntegrity.missing.length === 0 && sceneIntegrity.noUrl.length === 0 && sceneIntegrity.extra.length === 0) {
       runSceneIntegrityCheck();
     }
-  }, [activeTab, sceneSubTab, sceneLoading, sceneError, sceneIntegrity, runSceneIntegrityCheck]);
+  }, [activeTab, sceneLoading, sceneError, sceneIntegrity, runSceneIntegrityCheck]);
+
+  useEffect(() => {
+    if (activeTab === 'scenes') {
+      setSceneIntegrity({ found: [], missing: [], noUrl: [], extra: [] });
+      setSceneError(null);
+    }
+  }, [sceneSubTab]);
 
   const resolveProvider = async (row, service, options = {}) => {
     const { reloadAfter = true, showNotice = true } = options;
