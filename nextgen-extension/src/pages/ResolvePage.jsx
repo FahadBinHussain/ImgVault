@@ -2661,6 +2661,22 @@ export default function ResolvePage() {
                                   try {
                                     const paths = [file.path, ...textureFiles.map((t) => t.path).filter(Boolean)];
                                     if (paths.length !== total) throw new Error('A file in this group has no exact path — refusing to delete the group.');
+                                    // Pre-flight: re-read the DB and abort if any file in this
+                                    // group got linked since the check ran. Never delete a
+                                    // file that any item references now.
+                                    const [freshImages, freshVault] = await Promise.all([sendMessage('getImages'), sendMessage('getVaultImages')]);
+                                    const refIds = new Set();
+                                    const refNames = new Set();
+                                    for (const it of [...(freshImages || []), ...(freshVault || [])]) {
+                                      if (!it) continue;
+                                      const tb = it.videoHosts?.terabox || {};
+                                      const ex = it.extraMetadata?.videoHosts?.terabox || {};
+                                      [tb.fileId, tb.fs_id, ex.fileId, ex.fs_id, it.teraboxFileId].filter(Boolean).forEach((v) => refIds.add(String(v)));
+                                      [tb.filename, ex.filename, it.teraboxFileName, it.fileName].filter(Boolean).forEach((v) => refNames.add(String(v)));
+                                    }
+                                    const groupFiles = [file, ...textureFiles];
+                                    const linked = groupFiles.find((f) => (f.fs_id && refIds.has(String(f.fs_id))) || (f.server_filename && refNames.has(String(f.server_filename))));
+                                    if (linked) throw new Error(`"${linked.server_filename || linked.fs_id}" was linked to a gallery item since the check — re-run Check Scenes. Nothing deleted.`);
                                     await deleteTeraBoxFiles(settings.teraboxCookie, paths);
                                     setSceneIntegrity((prev) => ({
                                       ...prev,

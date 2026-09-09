@@ -553,7 +553,11 @@ export async function deleteTeraBoxFiles(explicitCookie, paths) {
   }
   const auth = await authorizeTeraBox(explicitCookie);
   if (!auth) throw new Error('No TeraBox cookie. Log in to TeraBox or set the cookie in Settings.');
-  const postDelete = async (jsToken) => {
+  // NOTE: /api/list only works on the dm base for this account (www returns
+  // errno -6 — verified 2.11.8). filemanager goes to dm first for the same
+  // reason, falling back to www only if dm fails. same paths both times, so
+  // the fallback can never touch a different file.
+  const postDelete = async (base, jsToken) => {
     const qp = new URLSearchParams({
       app_id: '250528',
       web: '1',
@@ -564,27 +568,32 @@ export async function deleteTeraBoxFiles(explicitCookie, paths) {
       opera: 'delete',
     });
     const body = new URLSearchParams({ filelist: JSON.stringify(list) }).toString().replace(/\+/g, '%20');
-    const res = await fetch(`${TERABOX_TOKEN_BASE}/api/filemanager?${qp}`, {
+    const res = await fetch(`${base}/api/filemanager?${qp}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': auth.cookie,
         'Accept': 'application/json, text/plain, */*',
-        'Referer': `${TERABOX_TOKEN_BASE}/`,
+        'Referer': `${base}/`,
         'User-Agent': userAgent(),
         'X-Requested-With': 'XMLHttpRequest',
       },
       body,
     });
-    if (!res.ok) throw new Error(`TeraBox delete HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`TeraBox delete HTTP ${res.status} on ${base}`);
     return res.json();
   };
-  let json = await postDelete(auth.jsToken);
+  const stripToken = (t) => (typeof t === 'string' && t.includes('|') ? t.slice(0, t.indexOf('|')) : t);
+  let json = await postDelete(TERABOX_API_BASE, auth.jsToken);
   if (json && json.errno === 450016) {
-    const fresh = await fetchJsToken(auth.cookie, true);
-    json = await postDelete(fresh && fresh.includes('|') ? fresh.slice(0, fresh.indexOf('|')) : fresh);
+    json = await postDelete(TERABOX_API_BASE, stripToken(await fetchJsToken(auth.cookie, true)));
   }
-  if (!json || json.errno !== 0) throw new Error(`TeraBox delete error: errno=${json?.errno ?? '?'}`);
+  if (json && json.errno !== 0 && json.errno !== 450016) {
+    const fallback = await postDelete(TERABOX_TOKEN_BASE, auth.jsToken);
+    if (fallback && fallback.errno === 0) return true;
+    throw new Error(`TeraBox delete failed (errno=${json.errno} on dm, errno=${fallback?.errno ?? '?'} on www). Nothing deleted — files are untouched.`);
+  }
+  if (!json || json.errno !== 0) throw new Error(`TeraBox delete error: errno=${json?.errno ?? '?'}. Nothing deleted.`);
   return true;
 }
 
