@@ -134,6 +134,7 @@ export default function ResolvePage() {
   const [sceneError, setSceneError] = useState(null);
   const [sceneFilter, setSceneFilter] = useState('all');
   const [sceneKeysConfigured, setSceneKeysConfigured] = useState(false);
+  const [sceneSubTab, setSceneSubTab] = useState('udrop'); // 'udrop' | 'terabox' - mirrors videoSubTab symmetry
 
   // ---- Filemoon integrity check state ----
   const [filemoonIntegrity, setFilemoonIntegrity] = useState({ found: [], missing: [], noUrl: [], extra: [] });
@@ -628,33 +629,23 @@ export default function ResolvePage() {
         if (!item) return false;
         return item.kind === 'scene' || Boolean(item.spzUrl) || String(item.fileName||'').toLowerCase().endsWith('.spz') || String(item.fileType||'').toLowerCase().startsWith('model/');
       });
-      const hasUdrop = (item) => Boolean(item.spzUrl || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop) || hasText(settings?.udropKey1);
-      const hasTerabox = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.videoHosts?.terabox) || Boolean(item.extraMetadata?.videoHosts?.terabox) || String(item.fileName||'').toLowerCase().endsWith('.spz');
-      const udropScenes = sceneItems.filter(hasUdrop);
-      const teraboxScenes = sceneItems.filter(hasTerabox);
-      let combined = { found: [], missing: [], noUrl: [], extra: [] };
-      if (udropScenes.length > 0 && hasText(settings?.udropKey1) && hasText(settings?.udropKey2)) {
-        try {
-          const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
-          const r = await checkSceneIntegrity(udropScenes, allItems, auth.access_token, auth.account_id);
-          combined.found.push(...r.found); combined.missing.push(...r.missing); combined.noUrl.push(...r.noUrl); combined.extra.push(...r.extra);
-        } catch (e) { setSceneError(e.message || String(e)); }
+      const isUdropScene = (item) => Boolean(item.spzUrl || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop);
+      const isTeraboxScene = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.videoHosts?.terabox || item.extraMetadata?.videoHosts?.terabox);
+      const filteredScenes = sceneSubTab === 'terabox' ? sceneItems.filter(isTeraboxScene) : sceneItems.filter(isUdropScene);
+      // Fallback: if filtered empty but we have scenes, show all for that host's noUrl
+      const targetScenes = filteredScenes.length > 0 ? filteredScenes : (sceneSubTab === 'terabox' ? [] : []);
+      let result = { found: [], missing: [], noUrl: [], extra: [] };
+      if (sceneSubTab === 'udrop') {
+        if (!hasText(settings?.udropKey1) || !hasText(settings?.udropKey2)) throw new Error('UDrop keys not configured. Go to Settings.');
+        const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
+        result = await checkSceneIntegrity(targetScenes.length ? targetScenes : sceneItems.filter(isUdropScene), allItems, auth.access_token, auth.account_id);
+      } else {
+        result = await checkTeraBoxIntegrity(targetScenes.length ? targetScenes : sceneItems.filter(isTeraboxScene), settings.teraboxCookie);
       }
-      if (teraboxScenes.length > 0) {
-        try {
-          const r2 = await checkTeraBoxIntegrity(teraboxScenes, settings.teraboxCookie);
-          // Map Terabox video integrity result to scene shape (same buckets)
-          combined.found.push(...(r2.found||[])); combined.missing.push(...(r2.missing||[])); combined.noUrl.push(...(r2.noUrl||[])); combined.extra.push(...(r2.extra||[]));
-        } catch (e) { console.warn('Terabox scene check failed', e.message); }
-      }
-      // Fallback: if neither host matched but we have scenes, treat as noUrl
-      if (combined.found.length===0 && combined.missing.length===0 && combined.extra.length===0 && sceneItems.length>0 && combined.noUrl.length===0) {
-        combined.noUrl = sceneItems.filter(s => !s.spzUrl && !s.teraboxDirectUrl && !s.udropDirectUrl && !(s.videoHosts?.terabox||s.videoHosts?.udrop));
-      }
-      setSceneIntegrity(combined);
+      setSceneIntegrity(result);
       setNotice({
-        type: combined.missing.length > 0 ? 'error' : 'success',
-        message: `3D Scene check (UDrop+Terabox): ${combined.found.length} found, ${combined.missing.length} broken, ${combined.noUrl.length} no url, ${combined.extra.length} extra.`,
+        type: result.missing.length > 0 ? 'error' : 'success',
+        message: `${sceneSubTab === 'udrop' ? 'UDrop' : 'TeraBox'} 3D check: ${result.found.length} found, ${result.missing.length} broken, ${result.noUrl.length} no url, ${result.extra.length} extra.`,
       });
     } catch (err) {
       setSceneError(err.message || String(err));
@@ -667,7 +658,7 @@ export default function ResolvePage() {
     if (activeTab === 'scenes' && !sceneLoading && !sceneError && sceneIntegrity.found.length === 0 && sceneIntegrity.missing.length === 0 && sceneIntegrity.noUrl.length === 0 && sceneIntegrity.extra.length === 0) {
       runSceneIntegrityCheck();
     }
-  }, [activeTab, sceneLoading, sceneError, sceneIntegrity, runSceneIntegrityCheck]);
+  }, [activeTab, sceneSubTab, sceneLoading, sceneError, sceneIntegrity, runSceneIntegrityCheck]);
 
   const resolveProvider = async (row, service, options = {}) => {
     const { reloadAfter = true, showNotice = true } = options;
@@ -2393,7 +2384,7 @@ export default function ResolvePage() {
           </>
         )}
 
-        {/* 3D Scene Integrity Tab */}
+        {/* 3D Scene Integrity Tab - symmetric to Video hosts sub-tabs */}
         {activeTab === 'scenes' && (
           <>
             <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -2402,7 +2393,7 @@ export default function ResolvePage() {
                   <Box className="h-4 w-4" />
                   3D Scene integrity
                 </div>
-                <h1 className="text-3xl font-semibold tracking-tight text-base-content">3D Scene files (.spz, .glb, UDrop & Terabox)</h1>
+                <h1 className="text-3xl font-semibold tracking-tight text-base-content">{sceneSubTab === 'udrop' ? 'UDrop scene files (.spz)' : 'TeraBox scene files (.spz)'}</h1>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -2420,6 +2411,15 @@ export default function ResolvePage() {
                   Settings
                 </Button>
               </div>
+            </section>
+
+            <section className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setSceneSubTab('udrop')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'udrop' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
+                <Shield className="h-4 w-4" /> UDrop 3D
+              </button>
+              <button type="button" onClick={() => setSceneSubTab('terabox')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'terabox' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
+                <Box className="h-4 w-4" /> TeraBox 3D
+              </button>
             </section>
 
             {!sceneKeysConfigured && (
