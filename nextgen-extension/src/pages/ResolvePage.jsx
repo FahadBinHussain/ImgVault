@@ -2814,7 +2814,7 @@ export default function ResolvePage() {
                           </div>
                         )}
 
-                        {status === 'missing' && codes.length > 0 && (
+                        {status === 'missing' && (codes || []).length > 0 && (
                           <div className="text-xs text-base-content/70">
                             <div className="font-medium text-error">Broken scene links:</div>
                             <div className="font-mono">{codes.join(', ')}</div>

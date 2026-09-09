@@ -798,9 +798,19 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
     const fileId = extractTeraBoxFileId(item);
     const fileName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
     collectTextureRefs(item, dbIds, dbNames);
+    // Host-specific ref: generic spzUrl/fileName also match foreign-host scenes,
+    // which must land in noUrl (never uploaded HERE), not missing. Missing is
+    // reserved for scenes linked to terabox whose file is gone (2.12.56 — the
+    // old path pushed codeless missing entries that crashed the render).
+    const hasTeraboxRef = Boolean(
+      links.watchUrl || links.directUrl || links.url ||
+      extraLinks.watchUrl || extraLinks.directUrl || extraLinks.url ||
+      item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl ||
+      fileId
+    );
 
     if (!hasLink && !fileId && !fileName) {
-      noUrl.push({ item });
+      noUrl.push({ item, codes: [] });
       continue;
     }
 
@@ -816,8 +826,10 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProg
       found.push({ item, matchedFile });
     } else if (!listingSucceeded) {
       found.push({ item, matchedFile: null });
+    } else if (hasTeraboxRef) {
+      missing.push({ item, codes: [] });
     } else {
-      missing.push({ item });
+      noUrl.push({ item, codes: [] });
     }
   }
 
