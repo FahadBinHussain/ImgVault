@@ -158,6 +158,12 @@ export default function ResolvePage() {
   const [fixingUdrop, setFixingUdrop] = useState({});
   const [fixProgress, setFixProgress] = useState({});
   const [fixSourcePicker, setFixSourcePicker] = useState(null); // { targetHost, item, hostSettings, sources, label, recheck }
+  // ---- Scene fix (noUrl/missing rows): local file picker + re-upload in place ----
+  const [sceneFixFor, setSceneFixFor] = useState(null); // { item, host }
+  const [sceneFixBusy, setSceneFixBusy] = useState(false);
+  const sceneFixSpzRef = useRef(null);
+  const sceneFixTexRef = useRef(null);
+  const sceneFixCfgRef = useRef(null);
 
   // ---- TeraBox integrity check state ----
   const [teraboxIntegrity, setTeraBoxIntegrity] = useState({ found: [], missing: [], noUrl: [], extra: [] });
@@ -597,6 +603,85 @@ export default function ResolvePage() {
         delete next[item.id];
         return next;
       });
+      setFixProgress((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+    }
+  };
+
+  // Scene Fix: pick .spz (+ optional texture/config) locally, upload via the
+  // catalog uploader (direct XHR, no 64MiB limit), then update the EXISTING
+  // scene row in place — same semantics as the video Fix (same item gains a
+  // working host link), not a duplicate item (2.12.57).
+  const runSceneFix = async ({ item, host, spzFile, textureFile, configFile }) => {
+    setSceneFixBusy(true);
+    setFixProgress((prev) => ({ ...prev, [item.id]: { phase: 'upload', message: 'Starting scene upload...', percent: null } }));
+    try {
+      const service = VIDEO_UPLOAD_SERVICES.find((s) => s.key === host);
+      if (!service) throw new Error(`Unknown scene host: ${host}`);
+      if (!service.isConfigured(settings)) throw new Error(`${service.label} is not configured. Go to Settings.`);
+
+      let sceneConfig = null;
+      if (configFile) {
+        try { sceneConfig = JSON.parse(await configFile.text()); } catch { throw new Error(`"${configFile.name}" is not valid JSON.`); }
+        const hasViewFields = Boolean(sceneConfig && (sceneConfig.position || sceneConfig.rotation || sceneConfig.cameraRadius || sceneConfig.scene || sceneConfig.controls));
+        if (!hasViewFields) {
+          setNotice({ type: 'warning', message: `Config "${configFile.name}" has no camera fields — viewer will use default framing.` });
+        }
+      }
+
+      const progress = async ({ loaded, total, percent }) => {
+        const message = percent !== null
+          ? `${service.label} scene upload: ${percent}% (${loaded} / ${total} bytes)`
+          : `${service.label} scene upload: ${loaded} bytes sent`;
+        setFixProgress((prev) => ({ ...prev, [item.id]: { phase: 'upload', message, percent } }));
+      };
+
+      const spzRes = await service.uploadWithProgress({
+        uploader: new service.uploaderClass(),
+        blob: spzFile,
+        settings,
+        data: { fileName: spzFile.name },
+        onProgress: progress,
+      });
+      let texRes = null;
+      if (textureFile) {
+        texRes = await service.uploadWithProgress({
+          uploader: new service.uploaderClass(),
+          blob: textureFile,
+          settings,
+          data: { fileName: textureFile.name },
+          onProgress: progress,
+        });
+      }
+
+      const updates = {};
+      if (host === 'udrop') {
+        updates.udropWatchUrl = spzRes.watchUrl || spzRes.url || '';
+        updates.udropDirectUrl = spzRes.directUrl || spzRes.url || '';
+      } else if (host === 'terabox') {
+        updates.teraboxWatchUrl = spzRes.watchUrl || spzRes.url || '';
+        updates.teraboxDirectUrl = spzRes.directUrl || spzRes.url || '';
+      }
+      updates.spzUrl = spzRes.directUrl || spzRes.url || spzRes.watchUrl || '';
+      updates.spzFileSize = spzFile.size;
+      if (texRes) {
+        updates.textureUrl = texRes.directUrl || texRes.url || texRes.watchUrl || '';
+        updates.textureFileSize = textureFile.size;
+      }
+      if (sceneConfig) updates.configJson = JSON.stringify(sceneConfig);
+
+      await sendMessage('updateImage', { id: item.id, ...updates });
+      await Promise.all([reloadImages({ silent: true }), reloadVaultImages()]);
+      const recheck = () => runSceneIntegrityCheck(sceneSubTab);
+      await recheck();
+      setNotice({ type: 'success', message: `Scene fixed on ${service.label} for "${item.pageTitle || item.fileName || 'scene'}".` });
+    } catch (err) {
+      setNotice({ type: 'error', message: `Failed to fix: ${err.message || err}` });
+    } finally {
+      setSceneFixBusy(false);
       setFixProgress((prev) => {
         const next = { ...prev };
         delete next[item.id];
@@ -2825,8 +2910,8 @@ export default function ResolvePage() {
 
                       <div className="flex flex-col justify-between gap-3 sm:w-52">
                         <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-200/60 px-3 py-2 text-xs text-base-content/65">
-                          {status === 'missing' && 'Needs re-upload to UDrop'}
-                          {status === 'found' && 'Verified on UDrop'}
+                          {status === 'missing' && `Needs re-upload to ${sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'}`}
+                          {status === 'found' && `Verified on ${sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'}`}
                           {status === 'noUrl' && 'No scene URL stored'}
                         </div>
 
@@ -2841,6 +2926,30 @@ export default function ResolvePage() {
                               Open UDrop
                             </Button>
                           )}
+                          {(status === 'noUrl' || status === 'missing') && (
+                            <Button
+                              variant="primary"
+                              className="h-9 justify-center gap-2 text-sm"
+                              disabled={sceneFixBusy}
+                              onClick={() => setSceneFixFor({ item, host: sceneSubTab })}
+                            >
+                              <UploadCloud className="h-4 w-4" />
+                              Fix
+                            </Button>
+                          )}
+                          {fixProgress[item.id] && (
+                            <div className="flex flex-col gap-1.5">
+                              <div className="text-[11px] leading-tight text-base-content/70">
+                                {fixProgress[item.id].message || 'Working...'}
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-base-300">
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-primary-500 to-secondary-500 transition-all duration-300"
+                                  style={{ width: `${Math.max(4, fixProgress[item.id].percent ?? 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </article>
@@ -2851,6 +2960,17 @@ export default function ResolvePage() {
           </>
         )}
 
+        {sceneFixFor && (
+          <SceneFixModal
+            sceneFixFor={sceneFixFor}
+            busy={sceneFixBusy}
+            onClose={() => { if (!sceneFixBusy) setSceneFixFor(null); }}
+            onSubmit={(files) => runSceneFix({ item: sceneFixFor.item, host: sceneFixFor.host, ...files })}
+            spzRef={sceneFixSpzRef}
+            texRef={sceneFixTexRef}
+            cfgRef={sceneFixCfgRef}
+          />
+        )}
         {fixSourcePicker && (
           <Modal
             isOpen
@@ -2967,4 +3087,78 @@ function findPendingItemForFile(items, file) {
   );
   if (pendingItems.length === 0) return null;
   return findMatchingItemForFile(pendingItems, file);
+}
+
+/**
+ * Scene Fix modal: pick the .spz (+ optional texture/config) and re-upload to
+ * the checked host, updating the existing scene row in place (2.12.57).
+ */
+function SceneFixModal({ sceneFixFor, busy, onClose, onSubmit, spzRef, texRef, cfgRef }) {
+  const [spzFile, setSpzFile] = useState(null);
+  const [texFile, setTexFile] = useState(null);
+  const [cfgFile, setCfgFile] = useState(null);
+  const { item, host } = sceneFixFor;
+  const hostLabel = host === 'terabox' ? 'TeraBox' : 'UDrop';
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`Fix scene on ${hostLabel}`}
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-base-content/70">
+          Pick the scene files to re-upload. The existing item
+          {' '}<span className="font-semibold">{item?.pageTitle || item?.fileName || item?.id}</span>
+          {' '}is updated in place — no duplicate is created.
+        </p>
+
+        <div
+          className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${spzFile ? 'border-cyan-500 bg-cyan-500/10' : 'border-base-300 hover:border-cyan-500/50'}`}
+          onClick={() => spzRef.current?.click()}
+        >
+          <input ref={spzRef} type="file" accept=".spz" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f && /\.spz$/i.test(f.name)) setSpzFile(f); }} />
+          {spzFile
+            ? <p className="text-sm font-medium text-cyan-600">{spzFile.name} ({(spzFile.size / 1024 / 1024).toFixed(1)} MB)</p>
+            : <p className="text-sm text-base-content/60">.spz file — required</p>}
+        </div>
+
+        <div
+          className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${texFile ? 'border-purple-500 bg-purple-500/10' : 'border-base-300 hover:border-purple-500/50'}`}
+          onClick={() => texRef.current?.click()}
+        >
+          <input ref={texRef} type="file" accept=".webp,image/webp" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) setTexFile(f); }} />
+          {texFile
+            ? <p className="text-sm font-medium text-purple-600">{texFile.name} ({(texFile.size / 1024 / 1024).toFixed(1)} MB)</p>
+            : <p className="text-sm text-base-content/60">texture .webp — optional</p>}
+        </div>
+
+        <div
+          className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${cfgFile ? 'border-amber-500 bg-amber-500/10' : 'border-base-300 hover:border-amber-500/50'}`}
+          onClick={() => cfgRef.current?.click()}
+        >
+          <input ref={cfgRef} type="file" accept=".json" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) setCfgFile(f); }} />
+          {cfgFile
+            ? <p className="text-sm font-medium text-amber-600">{cfgFile.name}</p>
+            : <p className="text-sm text-base-content/60">config .json — optional (keeps current when empty)</p>}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={busy || !spzFile}
+            onClick={() => onSubmit({ spzFile, textureFile: texFile, configFile: cfgFile })}
+            className="bg-cyan-600 hover:bg-cyan-700 border-none"
+          >
+            <UploadCloud className="h-4 w-4" />
+            {busy ? 'Uploading...' : `Upload to ${hostLabel}`}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
