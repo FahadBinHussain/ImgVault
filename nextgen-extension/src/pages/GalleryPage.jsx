@@ -1365,6 +1365,17 @@ export default function GalleryPage() {
       let sceneConfig = null;
       if (configFile) {
         try { sceneConfig = JSON.parse(await configFile.text()); } catch { sceneConfig = null; }
+        // Loud guard: the viewer only understands view-transform configs —
+        // flat {position, rotation, cameraRadius} or nested {scene, controls}.
+        // A raw Marble API world dump (id/display_name/generation_output/…)
+        // has no camera fields and silently does nothing in the viewer.
+        const cfgKeys = sceneConfig && typeof sceneConfig === 'object' ? Object.keys(sceneConfig) : [];
+        const hasViewFields = Boolean(
+          sceneConfig && (sceneConfig.position || sceneConfig.rotation || sceneConfig.cameraRadius || sceneConfig.scene || sceneConfig.controls)
+        );
+        if (!hasViewFields) {
+          await appendClientUploadLog(`WARNING: config "${configFile.name}" has no camera fields (keys: ${cfgKeys.slice(0, 8).join(', ') || 'none'}). Expected {position, rotation, cameraRadius}. The scene still uploads, but the viewer will use default framing.`, 'warning');
+        }
       }
       const tagsArray = (tags||'').split(',').map(t=>t.trim()).filter(Boolean);
       // Use SceneUploadDialog path via background but bypass 64MiB by doing direct XHR here instead of sendMessage arrays
