@@ -358,7 +358,7 @@ async function request(cookie, jsToken, pathname, params = {}, retried = false) 
  * file/list 100-cap). Loop pages until a page returns fewer than `num`.
  * @returns {Promise<Array>} files, or [] on error
  */
-async function listTeraBoxFolder(cookie, jsToken, dir = '/') {
+async function listTeraBoxFolder(cookie, jsToken, dir = '/', onPage) {
   const num = 100;
   const all = [];
   let page = 1;
@@ -374,6 +374,7 @@ async function listTeraBoxFolder(cookie, jsToken, dir = '/') {
     });
     if (!json || json.errno !== 0 || !Array.isArray(json.list)) break;
     all.push(...json.list);
+    try { onPage?.({ dir, page, pageCount: all.length }); } catch (_) {}
     if (json.list.length < num) break;
     page += 1;
     if (page > 100) break; // safety: never loop forever
@@ -385,7 +386,8 @@ async function listTeraBoxFolder(cookie, jsToken, dir = '/') {
  * Recursively list ALL files across every folder.
  * @returns {Promise<Array<{fs_id, path, server_filename, size, isdir, _folder}>>}
  */
-export async function listAllTeraBoxFiles(explicitCookie) {
+export async function listAllTeraBoxFiles(explicitCookie, onProgress) {
+  try { onProgress?.({ phase: 'token' }); } catch (_) {}
   const auth = await authorizeTeraBox(explicitCookie);
   if (!auth) throw new Error('No TeraBox cookie. Log in to TeraBox or set the cookie in Settings.');
 
@@ -398,7 +400,9 @@ export async function listAllTeraBoxFiles(explicitCookie) {
     if (visited.has(dir)) continue;
     visited.add(dir);
 
-    const entries = await listTeraBoxFolder(auth.cookie, auth.jsToken, dir);
+    const entries = await listTeraBoxFolder(auth.cookie, auth.jsToken, dir, () => {
+      try { onProgress?.({ phase: 'list', folder, files: allFiles.length, foldersLeft: queue.length }); } catch (_) {}
+    });
     for (const entry of entries) {
       if (entry.isdir === 1) {
         const subDir = String(entry.path || `${dir}${dir.endsWith('/') ? '' : '/'}${entry.server_filename}`);
@@ -421,6 +425,7 @@ export async function listAllTeraBoxFiles(explicitCookie) {
         });
       }
     }
+    try { onProgress?.({ phase: 'list', folder, files: allFiles.length, foldersLeft: queue.length }); } catch (_) {}
   }
 
   return allFiles;
@@ -525,7 +530,7 @@ export async function resolveTeraBoxPlaybackUrl(explicitCookie, fsId, fileName =
  * @param {string} cookie
  * @returns {Promise<{found:[],missing:[],noUrl:[],extra:[]}>}
  */
-export async function checkTeraBoxIntegrity(items, cookie) {
+export async function checkTeraBoxIntegrity(items, cookie, onProgress) {
   const found = [];
   const missing = [];
   const noUrl = [];
@@ -534,7 +539,7 @@ export async function checkTeraBoxIntegrity(items, cookie) {
   let files = [];
   let listingSucceeded = false;
   try {
-    files = await listAllTeraBoxFiles(cookie);
+    files = await listAllTeraBoxFiles(cookie, onProgress);
     listingSucceeded = true;
     console.log(`[teraBoxApi] Listed ${files.length} TeraBox files.`);
   } catch (err) {
@@ -693,7 +698,7 @@ export async function deleteTeraBoxFiles(explicitCookie, paths) {
  * @param {string} cookie
  * @returns {Promise<{found:[],missing:[],noUrl:[],extra:[]}>}
  */
-export async function checkTeraBoxSceneIntegrity(items, allItems, cookie) {
+export async function checkTeraBoxSceneIntegrity(items, allItems, cookie, onProgress) {
   const found = [];
   const missing = [];
   const noUrl = [];
@@ -702,7 +707,7 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie) {
   let files = [];
   let listingSucceeded = false;
   try {
-    files = await listAllTeraBoxFiles(cookie);
+    files = await listAllTeraBoxFiles(cookie, onProgress);
     listingSucceeded = true;
     console.log(`[teraBoxApi] Scene check: listed ${files.length} TeraBox files.`);
   } catch (err) {

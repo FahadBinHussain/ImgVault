@@ -137,6 +137,7 @@ export default function ResolvePage() {
   const [sceneFilter, setSceneFilter] = useState('all');
   const [sceneKeysConfigured, setSceneKeysConfigured] = useState(false);
   const [sceneSubTab, setSceneSubTab] = useState('udrop'); // 'udrop' | 'terabox'
+  const [sceneLoadingMessage, setSceneLoadingMessage] = useState(null);
   const sceneCheckSeqRef = useRef(0); // latest scene check wins; stale runs discard
 
   // ---- Filemoon integrity check state ----
@@ -153,6 +154,7 @@ export default function ResolvePage() {
   // ---- TeraBox integrity check state ----
   const [teraboxIntegrity, setTeraBoxIntegrity] = useState({ found: [], missing: [], noUrl: [], extra: [] });
   const [teraboxLoading, setTeraBoxLoading] = useState(false);
+  const [teraboxLoadingMessage, setTeraBoxLoadingMessage] = useState(null);
   const [teraboxError, setTeraBoxError] = useState(null);
   const [teraboxFilter, setTeraBoxFilter] = useState('all');
   const [teraboxKeysConfigured, setTeraBoxKeysConfigured] = useState(false);
@@ -456,13 +458,17 @@ export default function ResolvePage() {
         return isVideo || hasTeraBox;
       });
 
-      const result = await checkTeraBoxIntegrity(videoItems, settings.teraboxCookie);
+      const result = await checkTeraBoxIntegrity(videoItems, settings.teraboxCookie, (p) => {
+        setTeraBoxLoadingMessage(p.phase === 'token' ? 'Resolving TeraBox session…' : `Listing ${p.folder || '/'}… ${p.files} files so far`);
+      });
+      setTeraBoxLoadingMessage(null);
       setTeraBoxIntegrity(result);
       setNotice({
         type: result.missing.length > 0 ? 'error' : 'success',
         message: `TeraBox check: ${result.found.length} found, ${result.missing.length} broken links, ${result.noUrl.length} no url, ${result.extra.length} extra on terabox.`,
       });
     } catch (err) {
+      setTeraBoxLoadingMessage(null);
       setTeraBoxError(err.message || String(err));
     } finally {
       setTeraBoxLoading(false);
@@ -645,9 +651,13 @@ export default function ResolvePage() {
         const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
         result = await checkSceneIntegrity(filteredScenes.length ? filteredScenes : sceneItems.filter(isUdropScene), allItems, auth.access_token, auth.account_id);
       } else {
-        result = await checkTeraBoxSceneIntegrity(sceneItems.filter(isTeraboxScene), allItems, settings.teraboxCookie);
+        result = await checkTeraBoxSceneIntegrity(sceneItems.filter(isTeraboxScene), allItems, settings.teraboxCookie, (p) => {
+          if (seq !== sceneCheckSeqRef.current) return;
+          setSceneLoadingMessage(p.phase === 'token' ? 'Resolving TeraBox session…' : `Listing ${p.folder || '/'}… ${p.files} files so far`);
+        });
       }
       if (seq !== sceneCheckSeqRef.current) return;
+      setSceneLoadingMessage(null);
       setSceneIntegrity(result);
       setNotice({
         type: result.missing.length > 0 ? 'error' : 'success',
@@ -655,6 +665,7 @@ export default function ResolvePage() {
       });
     } catch (err) {
       if (seq !== sceneCheckSeqRef.current) return;
+      setSceneLoadingMessage(null);
       setSceneError(err.message || String(err));
     } finally {
       if (seq === sceneCheckSeqRef.current) setSceneLoading(false);
@@ -671,6 +682,7 @@ export default function ResolvePage() {
     if (activeTab === 'scenes') {
       setSceneIntegrity({ found: [], missing: [], noUrl: [], extra: [] });
       setSceneError(null);
+      setSceneLoadingMessage(null);
       setNotice(null);
     }
   }, [sceneSubTab, activeTab]);
@@ -2128,9 +2140,14 @@ export default function ResolvePage() {
 
             <section className="grid gap-3">
               {teraboxLoading && (
-                <div className="flex min-h-64 items-center justify-center rounded-[var(--radius-box)] border border-base-300 bg-base-100 text-base-content/60">
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Checking TeraBox...
+                <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-[var(--radius-box)] border border-base-300 bg-base-100 text-base-content/60">
+                  <div className="flex items-center">
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    Checking TeraBox...
+                  </div>
+                  {teraboxLoadingMessage && (
+                    <div className="text-xs text-base-content/50">{teraboxLoadingMessage}</div>
+                  )}
                 </div>
               )}
 
@@ -2482,9 +2499,14 @@ export default function ResolvePage() {
 
             <section className="grid gap-3">
               {sceneLoading && (
-                <div className="flex min-h-64 items-center justify-center rounded-[var(--radius-box)] border border-base-300 bg-base-100 text-base-content/60">
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Loading {sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'} file list...
+                <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-[var(--radius-box)] border border-base-300 bg-base-100 text-base-content/60">
+                  <div className="flex items-center">
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    Loading {sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'} file list...
+                  </div>
+                  {sceneSubTab === 'terabox' && sceneLoadingMessage && (
+                    <div className="text-xs text-base-content/50">{sceneLoadingMessage}</div>
+                  )}
                 </div>
               )}
 
