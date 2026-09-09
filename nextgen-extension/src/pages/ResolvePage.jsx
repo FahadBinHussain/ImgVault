@@ -650,7 +650,7 @@ export default function ResolvePage() {
     } finally {
       setSceneLoading(false);
     }
-  }, [settings, sendMessage, checkSceneKeysConfigured]);
+  }, [settings, sendMessage, checkSceneKeysConfigured, sceneSubTab]);
 
   useEffect(() => {
     if (activeTab === 'scenes' && !sceneLoading && !sceneError && sceneIntegrity.found.length === 0 && sceneIntegrity.missing.length === 0 && sceneIntegrity.noUrl.length === 0 && sceneIntegrity.extra.length === 0) {
