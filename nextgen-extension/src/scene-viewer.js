@@ -162,6 +162,16 @@ try {
     setProgress(25, 'Loaded from cache');
     spzBytes = cached.spzBuffer;
     configJson = cached.configJson;
+    // A null config cached from an earlier open (uploaded before config saved,
+    // or a failed fetch) must not stick forever — always refetch fresh config
+    // and prefer it when present.
+    try {
+      const cfgResp = await chrome.runtime.sendMessage({ action: 'getSceneConfig', mediaId: sceneId });
+      if (cfgResp?.success && cfgResp.data) {
+        configJson = cfgResp.data;
+        setCachedBlob(sceneId, spzBytes, configJson);
+      }
+    } catch {}
   } else {
     // Try direct fetch via getSceneDirectUrl to bypass 64MiB sendMessage limit for large spz
     let directUrl = spzUrl;
@@ -229,7 +239,7 @@ try {
 
   splatGroup.scale.setScalar(4.5);
 
-  const rawCamR = configJson?.cameraRadius || configJson?.controls?.camera_radius || configJson?.camera?.position?.[2];
+  const rawCamR = configJson?.cameraRadius || configJson?.controls?.camera_radius || configJson?.camera?.position?.[2] || 5;
   camera.position.set(0, 0, rawCamR);
   camera.lookAt(0, 0, 0);
   controls.target.set(0, 0, 0);
@@ -265,7 +275,7 @@ try {
   scene.add(splatGroup);
 
   document.getElementById('resetBtn').addEventListener('click', () => {
-    camera.position.set(0, 0, rawCamR);
+    camera.position.set(0, 0, rawCamR || 5);
     camera.lookAt(0, 0, 0);
     controls.target.set(0, 0, 0);
     controls.update();
