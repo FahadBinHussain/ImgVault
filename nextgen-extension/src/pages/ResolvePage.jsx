@@ -600,9 +600,11 @@ export default function ResolvePage() {
     }
   };
 
-  // ---- 3D Scene integrity helpers ----
+  // ---- 3D Scene integrity helpers (UDrop + Terabox) ----
   const checkSceneKeysConfigured = useCallback(() => {
-    const configured = hasText(settings?.udropKey1) && hasText(settings?.udropKey2);
+    const udropConfigured = hasText(settings?.udropKey1) && hasText(settings?.udropKey2);
+    const teraboxConfigured = true;
+    const configured = udropConfigured || teraboxConfigured;
     setSceneKeysConfigured(configured);
     return configured;
   }, [settings]);
@@ -613,28 +615,46 @@ export default function ResolvePage() {
 
   const runSceneIntegrityCheck = useCallback(async () => {
     if (!checkSceneKeysConfigured()) {
-      setSceneError('UDrop keys not configured. Go to Settings.');
+      setSceneError('No 3D host configured. Add UDrop keys or log into TeraBox.');
       return;
     }
     setSceneLoading(true);
     setSceneError(null);
     setNotice(null);
     try {
-      const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
-
-      // Fetch FRESH items; scenes live on UDrop as .spz files (spzUrl).
       const [freshImages, freshVault] = await Promise.all([sendMessage('getImages'), sendMessage('getVaultImages')]);
       const allItems = [...(freshImages || []), ...(freshVault || [])];
       const sceneItems = allItems.filter((item) => {
         if (!item) return false;
-        return item.kind === 'scene' || Boolean(item.spzUrl);
+        return item.kind === 'scene' || Boolean(item.spzUrl) || String(item.fileName||'').toLowerCase().endsWith('.spz') || String(item.fileType||'').toLowerCase().startsWith('model/');
       });
-
-      const result = await checkSceneIntegrity(sceneItems, allItems, auth.access_token, auth.account_id);
-      setSceneIntegrity(result);
+      const hasUdrop = (item) => Boolean(item.spzUrl || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop) || hasText(settings?.udropKey1);
+      const hasTerabox = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.videoHosts?.terabox) || Boolean(item.extraMetadata?.videoHosts?.terabox) || String(item.fileName||'').toLowerCase().endsWith('.spz');
+      const udropScenes = sceneItems.filter(hasUdrop);
+      const teraboxScenes = sceneItems.filter(hasTerabox);
+      let combined = { found: [], missing: [], noUrl: [], extra: [] };
+      if (udropScenes.length > 0 && hasText(settings?.udropKey1) && hasText(settings?.udropKey2)) {
+        try {
+          const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
+          const r = await checkSceneIntegrity(udropScenes, allItems, auth.access_token, auth.account_id);
+          combined.found.push(...r.found); combined.missing.push(...r.missing); combined.noUrl.push(...r.noUrl); combined.extra.push(...r.extra);
+        } catch (e) { setSceneError(e.message || String(e)); }
+      }
+      if (teraboxScenes.length > 0) {
+        try {
+          const r2 = await checkTeraBoxIntegrity(teraboxScenes, settings.teraboxCookie);
+          // Map Terabox video integrity result to scene shape (same buckets)
+          combined.found.push(...(r2.found||[])); combined.missing.push(...(r2.missing||[])); combined.noUrl.push(...(r2.noUrl||[])); combined.extra.push(...(r2.extra||[]));
+        } catch (e) { console.warn('Terabox scene check failed', e.message); }
+      }
+      // Fallback: if neither host matched but we have scenes, treat as noUrl
+      if (combined.found.length===0 && combined.missing.length===0 && combined.extra.length===0 && sceneItems.length>0 && combined.noUrl.length===0) {
+        combined.noUrl = sceneItems.filter(s => !s.spzUrl && !s.teraboxDirectUrl && !s.udropDirectUrl && !(s.videoHosts?.terabox||s.videoHosts?.udrop));
+      }
+      setSceneIntegrity(combined);
       setNotice({
-        type: result.missing.length > 0 ? 'error' : 'success',
-        message: `3D Scene check: ${result.found.length} found, ${result.missing.length} broken links, ${result.noUrl.length} no url, ${result.extra.length} extra on udrop.`,
+        type: combined.missing.length > 0 ? 'error' : 'success',
+        message: `3D Scene check (UDrop+Terabox): ${combined.found.length} found, ${combined.missing.length} broken, ${combined.noUrl.length} no url, ${combined.extra.length} extra.`,
       });
     } catch (err) {
       setSceneError(err.message || String(err));
@@ -2382,7 +2402,7 @@ export default function ResolvePage() {
                   <Box className="h-4 w-4" />
                   3D Scene integrity
                 </div>
-                <h1 className="text-3xl font-semibold tracking-tight text-base-content">UDrop scene files (.spz)</h1>
+                <h1 className="text-3xl font-semibold tracking-tight text-base-content">3D Scene files (.spz, .glb, UDrop & Terabox)</h1>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
