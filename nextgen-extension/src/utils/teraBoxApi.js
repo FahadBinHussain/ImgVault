@@ -531,6 +531,64 @@ export async function checkTeraBoxIntegrity(items, cookie) {
 }
 
 /**
+ * Delete files on TeraBox by EXACT full path (move to recycle bin, recoverable).
+ * Safety guards — refuses to delete anything but the given paths:
+ * - paths must be absolute (`/…`), never root `/`, never empty
+ * - max 10 paths per call (a scene group is 1 .spz + a few textures)
+ * - callers must pass `file.path` values from the same listing that produced
+ *   the orphan entry — never reconstruct a path from a bare filename
+ *   (filenames collide across folders, paths don't).
+ * Never calls clearRecycleBin — nothing is permanently wiped from here.
+ * @param {string} explicitCookie
+ * @param {Array<string>} paths - exact TeraBox full paths (e.g. `/ceramic.spz`)
+ * @returns {Promise<boolean>}
+ */
+export async function deleteTeraBoxFiles(explicitCookie, paths) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((s) => String(s || '')).filter(Boolean);
+  if (list.length === 0) throw new Error('No TeraBox paths to delete.');
+  if (list.length > 10) throw new Error(`Refusing to delete ${list.length} files at once (cap 10 — delete groups one by one).`);
+  for (const p of list) {
+    if (!p.startsWith('/')) throw new Error(`Refusing to delete non-absolute path: ${p}`);
+    if (p === '/') throw new Error('Refusing to delete root.');
+  }
+  const auth = await authorizeTeraBox(explicitCookie);
+  if (!auth) throw new Error('No TeraBox cookie. Log in to TeraBox or set the cookie in Settings.');
+  const postDelete = async (jsToken) => {
+    const qp = new URLSearchParams({
+      app_id: '250528',
+      web: '1',
+      channel: 'dubox',
+      clienttype: '0',
+      ...(jsToken ? { jsToken } : {}),
+      onnest: 'fail',
+      opera: 'delete',
+    });
+    const body = new URLSearchParams({ filelist: JSON.stringify(list) }).toString().replace(/\+/g, '%20');
+    const res = await fetch(`${TERABOX_TOKEN_BASE}/api/filemanager?${qp}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': auth.cookie,
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': `${TERABOX_TOKEN_BASE}/`,
+        'User-Agent': userAgent(),
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body,
+    });
+    if (!res.ok) throw new Error(`TeraBox delete HTTP ${res.status}`);
+    return res.json();
+  };
+  let json = await postDelete(auth.jsToken);
+  if (json && json.errno === 450016) {
+    const fresh = await fetchJsToken(auth.cookie, true);
+    json = await postDelete(fresh && fresh.includes('|') ? fresh.slice(0, fresh.indexOf('|')) : fresh);
+  }
+  if (!json || json.errno !== 0) throw new Error(`TeraBox delete error: errno=${json?.errno ?? '?'}`);
+  return true;
+}
+
+/**
  * TeraBox 3D scene integrity check — symmetric to UDrop checkSceneIntegrity.
  * Scenes are .spz files; video files must never show as scene orphans.
  * @param {Array} items – scene DB items (filtered)

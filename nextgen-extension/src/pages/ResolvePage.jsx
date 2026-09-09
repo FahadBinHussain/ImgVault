@@ -43,6 +43,7 @@ import {
 import {
   checkTeraBoxIntegrity,
   checkTeraBoxSceneIntegrity,
+  deleteTeraBoxFiles,
 } from '../utils/teraBoxApi';
 import { retryVideoHostPageSide } from '../utils/videoRetryPageSide';
 import { getVideoSourceHostOptions } from '../utils/videoProviderLinks';
@@ -2642,10 +2643,44 @@ export default function ResolvePage() {
                                 {deletingOrphans[String(file.file_id || file.id)] ? 'Deleting...' : `Delete${textureFiles.length > 0 ? ` (${1 + textureFiles.length})` : ''}`}
                               </Button>
                             )}
-                            {isTeraTab && (
-                              <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-200/40 px-3 py-2 text-[11px] text-base-content/55">
-                                Delete manually on terabox.com — no delete API.
-                              </div>
+                            {isTeraTab && (file.path || file.fs_id) && (
+                              <Button
+                                variant="primary"
+                                className="h-9 justify-center gap-2 text-sm"
+                                disabled={Boolean(deletingOrphans[String(file.fs_id || file.path)])}
+                                onClick={async () => {
+                                  const mainName = file.server_filename || file.name || file.path || 'file';
+                                  const total = 1 + textureFiles.length;
+                                  if (!file.path) {
+                                    setNotice({ type: 'error', message: `Cannot delete "${mainName}": no exact path recorded (refusing to guess — re-run Check Scenes).` });
+                                    return;
+                                  }
+                                  if (!confirm(`Move this orphaned scene (${total} file${total > 1 ? 's' : ''}: "${mainName}"${textureFiles.length > 0 ? ` + ${textureFiles.length} texture${textureFiles.length > 1 ? 's' : ''}` : ''}) to the TeraBox recycle bin? Recoverable from trash. This deletes ONLY the listed files.`)) return;
+                                  const delKey = String(file.fs_id || file.path);
+                                  setDeletingOrphans((prev) => ({ ...prev, [delKey]: true }));
+                                  try {
+                                    const paths = [file.path, ...textureFiles.map((t) => t.path).filter(Boolean)];
+                                    if (paths.length !== total) throw new Error('A file in this group has no exact path — refusing to delete the group.');
+                                    await deleteTeraBoxFiles(settings.teraboxCookie, paths);
+                                    setSceneIntegrity((prev) => ({
+                                      ...prev,
+                                      extra: prev.extra.filter((e) => String((e.file?.fs_id || e.file?.path)) !== delKey),
+                                    }));
+                                    setNotice({ type: 'success', message: `Moved orphaned scene (${paths.length} files) to TeraBox recycle bin.` });
+                                  } catch (err) {
+                                    setNotice({ type: 'error', message: `Failed to delete: ${err.message || err}` });
+                                  } finally {
+                                    setDeletingOrphans((prev) => {
+                                      const next = { ...prev };
+                                      delete next[delKey];
+                                      return next;
+                                    });
+                                  }
+                                }}
+                              >
+                                {deletingOrphans[String(file.fs_id || file.path)] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                                {deletingOrphans[String(file.fs_id || file.path)] ? 'Deleting...' : `Delete${textureFiles.length > 0 ? ` (${1 + textureFiles.length})` : ''}`}
+                              </Button>
                             )}
                           </div>
                         </div>
