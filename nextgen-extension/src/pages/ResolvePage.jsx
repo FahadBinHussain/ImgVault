@@ -2457,10 +2457,10 @@ export default function ResolvePage() {
             <section className="flex flex-wrap gap-2">
               {[
                 { value: 'all', label: 'All', count: sceneIntegrity.found.length + sceneIntegrity.missing.length + sceneIntegrity.noUrl.length + sceneIntegrity.extra.length, tip: 'Every saved 3D scene, counted once. This is the full list.' },
-                { value: 'missing', label: 'Broken links', count: sceneIntegrity.missing.length, tip: 'Scenes whose .spz file was deleted from UDrop or whose link is broken.' },
-                { value: 'found', label: 'Found', count: sceneIntegrity.found.length, tip: 'Scenes with a working .spz file on UDrop. Nothing to do.' },
-                { value: 'noUrl', label: 'No scene URL', count: sceneIntegrity.noUrl.length, tip: 'Saved scenes that have no UDrop link at all — they were never uploaded.' },
-                { value: 'extra', label: 'Extra on UDrop', count: sceneIntegrity.extra.length, tip: '.spz files on UDrop that are not linked to any saved scene. Likely old uploads or duplicates.' },
+                { value: 'missing', label: 'Broken links', count: sceneIntegrity.missing.length, tip: sceneSubTab === 'terabox' ? 'Scenes whose .spz file was deleted from TeraBox or whose link is broken.' : 'Scenes whose .spz file was deleted from UDrop or whose link is broken.' },
+                { value: 'found', label: 'Found', count: sceneIntegrity.found.length, tip: sceneSubTab === 'terabox' ? 'Scenes with a working .spz file on TeraBox. Nothing to do.' : 'Scenes with a working .spz file on UDrop. Nothing to do.' },
+                { value: 'noUrl', label: 'No scene URL', count: sceneIntegrity.noUrl.length, tip: 'Saved scenes that have no host link at all — they were never uploaded.' },
+                { value: 'extra', label: sceneSubTab === 'terabox' ? 'Extra on TeraBox' : 'Extra on UDrop', count: sceneIntegrity.extra.length, tip: sceneSubTab === 'terabox' ? 'Scene groups (1 .spz + its textures) on TeraBox not linked to any saved scene. Config lives in the DB, so only host files list here.' : 'Scene groups (1 .spz + its textures) on UDrop not linked to any saved scene. Config lives in the DB, so only host files list here.' },
               ].map((option) => (
                 <StatChip
                   key={option.value}
@@ -2478,7 +2478,7 @@ export default function ResolvePage() {
               {sceneLoading && (
                 <div className="flex min-h-64 items-center justify-center rounded-[var(--radius-box)] border border-base-300 bg-base-100 text-base-content/60">
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Loading UDrop file list...
+                  Loading {sceneSubTab === 'terabox' ? 'TeraBox' : 'UDrop'} file list...
                 </div>
               )}
 
@@ -2518,14 +2518,23 @@ export default function ResolvePage() {
                 return displayItems.map((entry) => {
                   const { item, status, matchedFile, codes } = entry;
 
-                  // ---- Extra (orphan) .spz files ----
+                  // ---- Extra (orphan) scene groups: .spz + its texture files ----
                   if (status === 'extra') {
                     const file = entry.file || {};
-                    const title = file.name || file.filename || file.file_id || 'Unknown file';
-                    const udropUrl = file.short_url || file.url || '';
+                    const textureFiles = Array.isArray(entry.textureFiles) ? entry.textureFiles : [];
+                    const isStandaloneTexture = Boolean(entry.standaloneTexture);
+                    const isTeraTab = sceneSubTab === 'terabox';
+                    const hostLabel = isTeraTab ? 'TeraBox' : 'UDrop';
+                    const title = file.server_filename || file.name || file.filename || file.file_id || file.fs_id || 'Unknown file';
+                    const udropUrl = !isTeraTab ? (file.short_url || file.url || '') : '';
+                    const groupKey = isTeraTab
+                      ? `scene-extra-tera-${file.fs_id || file.server_filename || Math.random()}`
+                      : `scene-extra-${file.file_id || file.id || file.short_url || Math.random()}`;
+                    const texName = (f) => f.server_filename || f.name || f.filename || f.file_id || f.fs_id || 'texture';
+                    const texKey = (f) => String(f.fs_id || f.file_id || f.id || f.server_filename || f.name || Math.random());
                     return (
                       <article
-                        key={`scene-extra-${file.file_id || file.id || file.short_url || Math.random()}`}
+                        key={groupKey}
                         className="grid gap-4 rounded-[var(--radius-box)] border border-base-300 bg-base-100 p-3 shadow-sm transition hover:border-warning/25 sm:grid-cols-[132px_1fr_auto]"
                       >
                         <div className="flex h-28 items-center justify-center overflow-hidden rounded-[var(--radius-box)] bg-base-200">
@@ -2537,15 +2546,27 @@ export default function ResolvePage() {
 
                         <div className="min-w-0 space-y-3">
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <h2 className="truncate text-base font-semibold text-base-content">{title}</h2>
                               <span className="inline-flex items-center gap-1 rounded-full border border-warning/20 bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning">
                                 <AlertCircle className="h-3 w-3" /> Not in DB
                               </span>
+                              {isStandaloneTexture && (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-info/20 bg-info/10 px-2 py-0.5 text-xs font-semibold text-info">
+                                  Texture only
+                                </span>
+                              )}
+                              {textureFiles.length > 0 && (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-base-300 bg-base-200/60 px-2 py-0.5 text-xs font-semibold text-base-content/70">
+                                  +{textureFiles.length} texture{textureFiles.length > 1 ? 's' : ''}
+                                </span>
+                              )}
                             </div>
                             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/55">
-                              {file.file_id && <span>ID: {file.file_id}</span>}
+                              {!isTeraTab && file.file_id && <span>ID: {file.file_id}</span>}
+                              {isTeraTab && file.fs_id && <span>ID: {file.fs_id}</span>}
                               {file._folderName && <span>Folder: {file._folderName}</span>}
+                              {file._folder && isTeraTab && <span>Folder: {file._folder}</span>}
                               {udropUrl && (
                                 <a href={udropUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                                   UDrop <ExternalLink className="h-3 w-3" />
@@ -2555,13 +2576,26 @@ export default function ResolvePage() {
                           </div>
 
                           <div className="text-xs text-base-content/70">
-                            This .spz file exists on UDrop but is not linked to any saved scene in your vault. It might be safe to delete.
+                            {isStandaloneTexture
+                              ? `This texture file exists on ${hostLabel} but is not linked to any saved scene. Its .spz is gone or was never uploaded.`
+                              : textureFiles.length > 0
+                                ? `This scene group (1 .spz + ${textureFiles.length} texture${textureFiles.length > 1 ? 's' : ''}) exists on ${hostLabel} but is not linked to any saved scene. Config lives in the DB, so only these ${1 + textureFiles.length} host files need cleanup.`
+                                : `This .spz file exists on ${hostLabel} but is not linked to any saved scene in your vault. It might be safe to delete.`}
                           </div>
+                          {textureFiles.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {textureFiles.map((texFile) => (
+                                <span key={texKey(texFile)} className="inline-flex items-center gap-1 rounded-full border border-base-300 bg-base-200/50 px-2 py-0.5 text-[11px] text-base-content/70">
+                                  {texName(texFile)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex flex-col justify-between gap-3 sm:w-52">
                           <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-200/60 px-3 py-2 text-xs text-base-content/65">
-                            Orphaned scene file
+                            {isStandaloneTexture ? 'Orphaned texture' : `Orphaned scene (${1 + textureFiles.length} files)`}
                           </div>
                           <div className="flex flex-col gap-2">
                             {udropUrl && (
@@ -2570,23 +2604,29 @@ export default function ResolvePage() {
                                 Open UDrop
                               </Button>
                             )}
-                            {(file.file_id || file.id) && (
+                            {!isTeraTab && (file.file_id || file.id) && (
                               <Button
                                 variant="primary"
                                 className="h-9 justify-center gap-2 text-sm"
                                 disabled={Boolean(deletingOrphans[String(file.file_id || file.id)])}
                                 onClick={async () => {
                                   const fid = String(file.file_id || file.id);
-                                  if (!confirm(`Delete "${file.name || file.filename || fid}" from UDrop? This cannot be undone.`)) return;
+                                  const total = 1 + textureFiles.length;
+                                  if (!confirm(`Delete this orphaned scene (${total} file${total > 1 ? 's' : ''}: "${file.name || file.filename || fid}"${textureFiles.length > 0 ? ` + ${textureFiles.length} texture${textureFiles.length > 1 ? 's' : ''}` : ''}) from UDrop? This cannot be undone.`)) return;
                                   setDeletingOrphans((prev) => ({ ...prev, [fid]: true }));
                                   try {
                                     const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
                                     await deleteUdropFile(auth.access_token, auth.account_id, fid);
+                                    for (const texFile of textureFiles) {
+                                      const texId = String(texFile.file_id || texFile.id || '');
+                                      if (!texId) continue;
+                                      try { await deleteUdropFile(auth.access_token, auth.account_id, texId); } catch (_) {}
+                                    }
                                     setSceneIntegrity((prev) => ({
                                       ...prev,
                                       extra: prev.extra.filter((e) => String((e.file?.file_id || e.file?.id)) !== fid),
                                     }));
-                                    setNotice({ type: 'success', message: `Deleted orphan scene file "${file.name || file.filename || fid}" from UDrop.` });
+                                    setNotice({ type: 'success', message: `Deleted orphaned scene (${total} files) from UDrop.` });
                                   } catch (err) {
                                     setNotice({ type: 'error', message: `Failed to delete: ${err.message || err}` });
                                   } finally {
@@ -2599,8 +2639,13 @@ export default function ResolvePage() {
                                 }}
                               >
                                 {deletingOrphans[String(file.file_id || file.id)] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                                {deletingOrphans[String(file.file_id || file.id)] ? 'Deleting...' : 'Delete'}
+                                {deletingOrphans[String(file.file_id || file.id)] ? 'Deleting...' : `Delete${textureFiles.length > 0 ? ` (${1 + textureFiles.length})` : ''}`}
                               </Button>
+                            )}
+                            {isTeraTab && (
+                              <div className="rounded-[var(--radius-box)] border border-base-300 bg-base-200/40 px-3 py-2 text-[11px] text-base-content/55">
+                                Delete manually on terabox.com — no delete API.
+                              </div>
                             )}
                           </div>
                         </div>

@@ -620,13 +620,42 @@ export async function checkTeraBoxSceneIntegrity(items, allItems, cookie) {
   }
 
   if (listingSucceeded) {
-    for (const file of files) {
-      const name = String(file.server_filename || file.name || '');
-      if (!name.toLowerCase().endsWith('.spz')) continue;
+    const TEXTURE_EXT_RE = /\.(webp|png|jpg|jpeg|gif|bmp|tiff|tga|exr|hdr)$/i;
+    const stemOf = (name) => String(name || '').split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
+    const coreOf = (stem) => String(stem || '').split('_').pop().split('-').pop();
+    const isOrphanFile = (file) => {
       const fid = String(file.fs_id || '');
-      if ((fid && (dbIds.has(fid) || referencedIds.has(fid))) || (name && (dbNames.has(name) || referencedNames.has(name)))) continue;
-      extra.push({ file });
+      const name = String(file.server_filename || file.name || '');
+      if ((fid && (dbIds.has(fid) || referencedIds.has(fid))) || (name && (dbNames.has(name) || referencedNames.has(name)))) return false;
+      return true;
+    };
+    const spzOrphans = [];
+    const textureOrphans = [];
+    for (const file of files) {
+      if (!isOrphanFile(file)) continue;
+      const name = String(file.server_filename || file.name || '');
+      if (name.toLowerCase().endsWith('.spz')) spzOrphans.push(file);
+      else if (TEXTURE_EXT_RE.test(name)) textureOrphans.push(file);
     }
+    const usedTextureIdx = new Set();
+    for (const spzFile of spzOrphans) {
+      const spzStem = stemOf(spzFile.server_filename || spzFile.name || '');
+      const spzCore = coreOf(spzStem);
+      const mates = [];
+      textureOrphans.forEach((texFile, idx) => {
+        if (usedTextureIdx.has(idx)) return;
+        const texStem = stemOf(texFile.server_filename || texFile.name || '');
+        if (texStem === spzStem || texStem === spzCore || spzStem.endsWith(`_${texStem}`) || spzStem.endsWith(`-${texStem}`) || texStem.endsWith(`_${spzCore}`)) {
+          mates.push(texFile);
+          usedTextureIdx.add(idx);
+        }
+      });
+      extra.push({ file: spzFile, textureFiles: mates });
+    }
+    textureOrphans.forEach((texFile, idx) => {
+      if (usedTextureIdx.has(idx)) return;
+      extra.push({ file: texFile, textureFiles: [], standaloneTexture: true });
+    });
   }
 
   return { found, missing, noUrl, extra };

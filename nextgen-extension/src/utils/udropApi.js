@@ -407,15 +407,44 @@ export async function checkSceneIntegrity(items, allItems, accessToken, accountI
   }
 
   if (listingSucceeded) {
-    for (const file of udropFiles) {
-      const name = String(file.name || file.filename || '');
-      if (!name.toLowerCase().endsWith('.spz')) continue;
+    const TEXTURE_EXT_RE = /\.(webp|png|jpg|jpeg|gif|bmp|tiff|tga|exr|hdr)$/i;
+    const stemOf = (name) => String(name || '').split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
+    const coreOf = (stem) => String(stem || '').split('_').pop().split('-').pop();
+    const isOrphanFile = (file) => {
       const code = file.short_url || file.shortUrl || '';
       const fileId = String(file.file_id || file.id || '');
-      if (dbCodes.has(code) || dbCodes.has(fileId)) continue;
-      if (referencedCodes.has(code) || referencedCodes.has(fileId)) continue;
-      extra.push({ file });
+      if (dbCodes.has(code) || dbCodes.has(fileId)) return false;
+      if (referencedCodes.has(code) || referencedCodes.has(fileId)) return false;
+      return true;
+    };
+    const spzOrphans = [];
+    const textureOrphans = [];
+    for (const file of udropFiles) {
+      if (!isOrphanFile(file)) continue;
+      const name = String(file.name || file.filename || '');
+      if (name.toLowerCase().endsWith('.spz')) spzOrphans.push(file);
+      else if (TEXTURE_EXT_RE.test(name)) textureOrphans.push(file);
     }
+    const usedTextureIdx = new Set();
+    for (const spzFile of spzOrphans) {
+      const spzName = String(spzFile.name || spzFile.filename || '');
+      const spzStem = stemOf(spzName);
+      const spzCore = coreOf(spzStem);
+      const mates = [];
+      textureOrphans.forEach((texFile, idx) => {
+        if (usedTextureIdx.has(idx)) return;
+        const texStem = stemOf(texFile.name || texFile.filename || '');
+        if (texStem === spzStem || texStem === spzCore || spzStem.endsWith(`_${texStem}`) || spzStem.endsWith(`-${texStem}`) || texStem.endsWith(`_${spzCore}`)) {
+          mates.push(texFile);
+          usedTextureIdx.add(idx);
+        }
+      });
+      extra.push({ file: spzFile, textureFiles: mates });
+    }
+    textureOrphans.forEach((texFile, idx) => {
+      if (usedTextureIdx.has(idx)) return;
+      extra.push({ file: texFile, textureFiles: [], standaloneTexture: true });
+    });
   }
 
   return { found, missing, noUrl, extra };
