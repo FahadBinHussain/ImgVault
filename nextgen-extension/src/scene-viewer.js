@@ -234,11 +234,14 @@ try {
     splatGroup.position.set(rawPos[0] || 0, rawPos[1] || 0, rawPos[2] || 0);
   }
 
-  const rawRot = configJson?.rotation || configJson?.scene?.rotation || [Math.PI, 0, 0];
+  // No flip unless the config says so — the PI default was a worldlabs.ai
+  // homepage convention, wrong for Marble-app worlds (rendered untransformed).
+  const rawRot = configJson?.rotation || configJson?.scene?.rotation || [0, 0, 0];
   splatGroup.rotation.set(rawRot[0] || 0, rawRot[1] || 0, rawRot[2] || 0);
 
-  // Optional per-scene overrides (absent = legacy defaults). Marble-app worlds
-  // render untransformed, so their stubs set scale 1 / rotation [0,0,0] / fov 75.
+  // Optional per-scene scale (absent = 4.5 legacy default, which the
+  // showcase configs were framed against — they set radius but no scale).
+  // Radius-less scenes auto-fit instead, so the default never matters there.
   const rawScale = Number.isFinite(+configJson?.scale) ? +configJson.scale : 4.5;
   splatGroup.scale.setScalar(rawScale);
   const rawFov = Number.isFinite(+configJson?.fov) ? +configJson.fov : 90;
@@ -247,11 +250,15 @@ try {
     camera.updateProjectionMatrix();
   }
 
+  const hasExplicitRadius = Boolean(configJson?.cameraRadius || configJson?.controls?.camera_radius || configJson?.camera?.position?.[2]);
   const rawCamR = configJson?.cameraRadius || configJson?.controls?.camera_radius || configJson?.camera?.position?.[2] || 5;
   camera.position.set(0, 0, rawCamR);
   camera.lookAt(0, 0, 0);
   controls.target.set(0, 0, 0);
   controls.update();
+  // Home view for the reset button — overwritten by auto-fit below when set.
+  let homePos = camera.position.clone();
+  let homeTarget = controls.target.clone();
 
   setProgress(60, 'Loading Gaussian Splat...');
 
@@ -267,6 +274,29 @@ try {
     fileBytes: spzBytes,
     onLoad: (mesh) => {
       clearInterval(progressTimer);
+      // No explicit radius in config: frame the splat itself instead of
+      // guessing a distance. Explicit radius always wins (showcase parity).
+      if (!hasExplicitRadius) {
+        try {
+          const box = new THREE.Box3().setFromObject(splat);
+          const sphere = box.getBoundingSphere(new THREE.Sphere());
+          if (Number.isFinite(sphere.radius) && sphere.radius > 0) {
+            const dist = sphere.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.05;
+            const dir = camera.position.clone().sub(sphere.center);
+            if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
+            dir.normalize();
+            controls.target.copy(sphere.center);
+            camera.position.copy(sphere.center).addScaledVector(dir, dist);
+            camera.lookAt(sphere.center);
+            controls.update();
+            homePos = camera.position.clone();
+            homeTarget = controls.target.clone();
+            console.log('[Viewer] auto-fit: radius', sphere.radius.toFixed(2), 'dist', dist.toFixed(2));
+          }
+        } catch (e) {
+          console.warn('[Viewer] auto-fit failed:', e?.message || e);
+        }
+      }
       setProgress(100, `Ready — ${mesh.numSplats.toLocaleString()} splats`);
       setTimeout(() => {
         document.getElementById('loading').classList.add('hidden');
@@ -283,9 +313,9 @@ try {
   scene.add(splatGroup);
 
   document.getElementById('resetBtn').addEventListener('click', () => {
-    camera.position.set(0, 0, rawCamR || 5);
-    camera.lookAt(0, 0, 0);
-    controls.target.set(0, 0, 0);
+    camera.position.copy(homePos);
+    controls.target.copy(homeTarget);
+    camera.lookAt(homeTarget);
     controls.update();
   });
 
