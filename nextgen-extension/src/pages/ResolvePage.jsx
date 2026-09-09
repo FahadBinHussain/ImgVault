@@ -127,6 +127,8 @@ export default function ResolvePage() {
   const [udropIntegrity, setUdropIntegrity] = useState({ found: [], missing: [], noUrl: [], extra: [] });
   const [udropFilter, setUdropFilter] = useState('all'); // 'all' | 'missing' | 'found' | 'noUrl' | 'extra'
   const [udropKeysConfigured, setUdropKeysConfigured] = useState(false);
+  // Empty results are valid — this flag stops the auto-check retriggering forever.
+  const [udropHasChecked, setUdropHasChecked] = useState(false);
   const [deletingOrphans, setDeletingOrphans] = useState({});
   const [linkingExtra, setLinkingExtra] = useState({});
 
@@ -150,6 +152,8 @@ export default function ResolvePage() {
   const [filemoonError, setFilemoonError] = useState(null);
   const [filemoonFilter, setFilemoonFilter] = useState('all');
   const [filemoonKeysConfigured, setFilemoonKeysConfigured] = useState(false);
+  // Empty results are valid — this flag stops the auto-check retriggering forever.
+  const [filemoonHasChecked, setFilemoonHasChecked] = useState(false);
   const [fixingFilemoon, setFixingFilemoon] = useState({});
   const [fixingUdrop, setFixingUdrop] = useState({});
   const [fixProgress, setFixProgress] = useState({});
@@ -162,6 +166,8 @@ export default function ResolvePage() {
   const [teraboxError, setTeraBoxError] = useState(null);
   const [teraboxFilter, setTeraBoxFilter] = useState('all');
   const [teraboxKeysConfigured, setTeraBoxKeysConfigured] = useState(false);
+  // Empty results are valid — this flag stops the auto-check retriggering forever.
+  const [teraboxHasChecked, setTeraboxHasChecked] = useState(false);
   const [fixingTeraBox, setFixingTeraBox] = useState({});
   const [resolvingAllTeraBox, setResolvingAllTeraBox] = useState(false);
 
@@ -319,6 +325,7 @@ export default function ResolvePage() {
   const runUdropIntegrityCheck = useCallback(async () => {
     if (!checkUdropKeysConfigured()) {
       setUdropError('UDrop keys not configured. Go to Settings.');
+      setUdropHasChecked(true);
       return;
     }
     setUdropLoading(true);
@@ -357,15 +364,16 @@ export default function ResolvePage() {
       setUdropError(err.message || String(err));
     } finally {
       setUdropLoading(false);
+      setUdropHasChecked(true);
     }
   }, [settings, sendMessage, checkUdropKeysConfigured]);
 
-  // Auto-run when switching to udrop tab if not loaded yet
+  // Auto-run when switching to udrop tab if not checked yet
   useEffect(() => {
-    if (activeTab === 'videos' && videoSubTab === 'udrop' && !udropLoading && !udropError && udropIntegrity.found.length === 0 && udropIntegrity.missing.length === 0 && udropIntegrity.noUrl.length === 0 && udropIntegrity.extra.length === 0) {
+    if (activeTab === 'videos' && videoSubTab === 'udrop' && !udropLoading && !udropHasChecked) {
       runUdropIntegrityCheck();
     }
-  }, [activeTab, videoSubTab, udropLoading, udropError, udropIntegrity, runUdropIntegrityCheck]);
+  }, [activeTab, videoSubTab, udropLoading, udropHasChecked, runUdropIntegrityCheck]);
 
   // ---- Filemoon integrity helpers ----
   const checkFilemoonKeysConfigured = useCallback(() => {
@@ -381,6 +389,7 @@ export default function ResolvePage() {
   const runFilemoonIntegrityCheck = useCallback(async () => {
     if (!checkFilemoonKeysConfigured()) {
       setFilemoonError('Filemoon API key not configured. Go to Settings.');
+      setFilemoonHasChecked(true);
       return;
     }
     setFilemoonLoading(true);
@@ -416,14 +425,15 @@ export default function ResolvePage() {
       setFilemoonError(err.message || String(err));
     } finally {
       setFilemoonLoading(false);
+      setFilemoonHasChecked(true);
     }
   }, [settings, sendMessage, checkFilemoonKeysConfigured]);
 
   useEffect(() => {
-    if (activeTab === 'videos' && videoSubTab === 'filemoon' && !filemoonLoading && !filemoonError && filemoonIntegrity.found.length === 0 && filemoonIntegrity.missing.length === 0 && filemoonIntegrity.noUrl.length === 0 && filemoonIntegrity.extra.length === 0) {
+    if (activeTab === 'videos' && videoSubTab === 'filemoon' && !filemoonLoading && !filemoonHasChecked) {
       runFilemoonIntegrityCheck();
     }
-  }, [activeTab, videoSubTab, filemoonLoading, filemoonError, filemoonIntegrity, runFilemoonIntegrityCheck]);
+  }, [activeTab, videoSubTab, filemoonLoading, filemoonHasChecked, runFilemoonIntegrityCheck]);
 
   // ---- TeraBox integrity helpers ----
   const checkTeraBoxKeysConfigured = useCallback(() => {
@@ -476,14 +486,15 @@ export default function ResolvePage() {
       setTeraBoxError(err.message || String(err));
     } finally {
       setTeraBoxLoading(false);
+      setTeraboxHasChecked(true);
     }
   }, [settings, sendMessage, checkTeraBoxKeysConfigured]);
 
   useEffect(() => {
-    if (activeTab === 'videos' && videoSubTab === 'terabox' && !teraboxLoading && !teraboxError && teraboxIntegrity.found.length === 0 && teraboxIntegrity.missing.length === 0 && teraboxIntegrity.noUrl.length === 0 && teraboxIntegrity.extra.length === 0) {
+    if (activeTab === 'videos' && videoSubTab === 'terabox' && !teraboxLoading && !teraboxHasChecked) {
       runTeraBoxIntegrityCheck();
     }
-  }, [activeTab, videoSubTab, teraboxLoading, teraboxError, teraboxIntegrity, runTeraBoxIntegrityCheck]);
+  }, [activeTab, videoSubTab, teraboxLoading, teraboxHasChecked, runTeraBoxIntegrityCheck]);
 
   const resolveAllVideoHost = useCallback(async (hostKey, targets, label) => {
     if (!targets || targets.length === 0 || resolvingAllTeraBox) return;
@@ -634,6 +645,7 @@ export default function ResolvePage() {
     if (!checkSceneKeysConfigured()) {
       if (seq !== sceneCheckSeqRef.current) return;
       setSceneError('No 3D host configured. Add UDrop keys or log into TeraBox.');
+      setSceneHasChecked(true);
       return;
     }
     setSceneLoading(true);
