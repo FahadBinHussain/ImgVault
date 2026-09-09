@@ -237,7 +237,15 @@ try {
   const rawRot = configJson?.rotation || configJson?.scene?.rotation || [Math.PI, 0, 0];
   splatGroup.rotation.set(rawRot[0] || 0, rawRot[1] || 0, rawRot[2] || 0);
 
-  splatGroup.scale.setScalar(4.5);
+  // Optional per-scene overrides (absent = legacy defaults). Marble-app worlds
+  // render untransformed, so their stubs set scale 1 / rotation [0,0,0] / fov 75.
+  const rawScale = Number.isFinite(+configJson?.scale) ? +configJson.scale : 4.5;
+  splatGroup.scale.setScalar(rawScale);
+  const rawFov = Number.isFinite(+configJson?.fov) ? +configJson.fov : 90;
+  if (camera.fov !== rawFov) {
+    camera.fov = rawFov;
+    camera.updateProjectionMatrix();
+  }
 
   const rawCamR = configJson?.cameraRadius || configJson?.controls?.camera_radius || configJson?.camera?.position?.[2] || 5;
   camera.position.set(0, 0, rawCamR);
