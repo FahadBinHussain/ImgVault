@@ -614,7 +614,9 @@ export default function ResolvePage() {
     checkSceneKeysConfigured();
   }, [checkSceneKeysConfigured]);
 
-  const runSceneIntegrityCheck = useCallback(async () => {
+  const runSceneIntegrityCheck = useCallback(async (overrideTab) => {
+    const tab = overrideTab === 'udrop' || overrideTab === 'terabox' ? overrideTab : sceneSubTab;
+    if (tab !== sceneSubTab) setSceneSubTab(tab);
     if (!checkSceneKeysConfigured()) {
       setSceneError('No 3D host configured. Add UDrop keys or log into TeraBox.');
       return;
@@ -631,9 +633,9 @@ export default function ResolvePage() {
       });
       const isUdropScene = (item) => Boolean((item.spzUrl && String(item.spzUrl).includes('udrop.com')) || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop) || Boolean(item.extraMetadata?.videoHosts?.udrop);
       const isTeraboxScene = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.videoHosts?.terabox || item.extraMetadata?.videoHosts?.terabox);
-      const filteredScenes = sceneSubTab === 'terabox' ? sceneItems.filter(isTeraboxScene) : sceneItems.filter(isUdropScene);
+      const filteredScenes = tab === 'terabox' ? sceneItems.filter(isTeraboxScene) : sceneItems.filter(isUdropScene);
       let result = { found: [], missing: [], noUrl: [], extra: [] };
-      if (sceneSubTab === 'udrop') {
+      if (tab === 'udrop') {
         if (!hasText(settings?.udropKey1) || !hasText(settings?.udropKey2)) throw new Error('UDrop keys not configured. Go to Settings.');
         const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
         result = await checkSceneIntegrity(filteredScenes.length ? filteredScenes : sceneItems.filter(isUdropScene), allItems, auth.access_token, auth.account_id);
@@ -643,7 +645,7 @@ export default function ResolvePage() {
       setSceneIntegrity(result);
       setNotice({
         type: result.missing.length > 0 ? 'error' : 'success',
-        message: `${sceneSubTab === 'udrop' ? 'UDrop' : 'TeraBox'} 3D check: ${result.found.length} found, ${result.missing.length} broken, ${result.noUrl.length} no url, ${result.extra.length} extra.`,
+        message: `${tab === 'udrop' ? 'UDrop' : 'TeraBox'} 3D check: ${result.found.length} found, ${result.missing.length} broken, ${result.noUrl.length} no url, ${result.extra.length} extra.`,
       });
     } catch (err) {
       setSceneError(err.message || String(err));
@@ -662,8 +664,9 @@ export default function ResolvePage() {
     if (activeTab === 'scenes') {
       setSceneIntegrity({ found: [], missing: [], noUrl: [], extra: [] });
       setSceneError(null);
+      setNotice(null);
     }
-  }, [sceneSubTab]);
+  }, [sceneSubTab, activeTab]);
 
   const resolveProvider = async (row, service, options = {}) => {
     const { reloadAfter = true, showNotice = true } = options;
@@ -2404,7 +2407,7 @@ export default function ResolvePage() {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Button
                   variant="primary"
-                  onClick={runSceneIntegrityCheck}
+                  onClick={() => runSceneIntegrityCheck()}
                   className="h-10 gap-2 px-3 text-sm"
                   disabled={sceneLoading}
                 >
@@ -2419,10 +2422,10 @@ export default function ResolvePage() {
             </section>
 
             <section className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => setSceneSubTab('udrop')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'udrop' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
+              <button type="button" onClick={() => runSceneIntegrityCheck('udrop')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'udrop' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
                 <Shield className="h-4 w-4" /> UDrop 3D
               </button>
-              <button type="button" onClick={() => setSceneSubTab('terabox')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'terabox' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
+              <button type="button" onClick={() => runSceneIntegrityCheck('terabox')} className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${sceneSubTab === 'terabox' ? 'border-primary bg-primary text-primary-content shadow-sm' : 'border-base-300 bg-base-100 text-base-content/70 hover:text-base-content'}`}>
                 <Box className="h-4 w-4" /> TeraBox 3D
               </button>
             </section>
