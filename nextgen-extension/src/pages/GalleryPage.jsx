@@ -395,6 +395,8 @@ export default function GalleryPage() {
   const spzInputRef = useRef(null);
   const texInputRef = useRef(null);
   const cfgInputRef = useRef(null);
+  const configReplaceInputRef = useRef(null);
+  const [replacingSceneConfig, setReplacingSceneConfig] = useState(false);
   
   // Selection mode state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -686,6 +688,16 @@ export default function GalleryPage() {
   const selectedKind = getMediaItemKind(modalImage || selectedItemForType);
   const isSelectedVideo = selectedKind === 'video';
   const isSelectedLink = selectedKind === 'link';
+  const isSelectedScene = selectedKind === 'scene' || Boolean(modalImage?._isScene);
+  let modalSceneConfig = null;
+  try {
+    modalSceneConfig = typeof modalImage?.configJson === 'string'
+      ? JSON.parse(modalImage.configJson)
+      : (modalImage?.configJson || null);
+  } catch { modalSceneConfig = null; }
+  const modalConfigHasView = Boolean(
+    modalSceneConfig && (modalSceneConfig.position || modalSceneConfig.rotation || modalSceneConfig.cameraRadius || modalSceneConfig.scene || modalSceneConfig.controls)
+  );
   const missingVideoServices = getMissingVideoUploadServices(modalImage);
   const hasRetryableVideoSource = Boolean(
     hasAnyVideoProviderLink(modalImage) ||
@@ -3587,6 +3599,39 @@ export default function GalleryPage() {
     );
   };
 
+  // Swap a scene's viewer config without re-uploading the splat + texture.
+  // The viewer refetches config on every open, so close + reopen to see it.
+  const replaceSceneConfig = async (file) => {
+    if (!file || !modalImage?.id) return;
+    setReplacingSceneConfig(true);
+    try {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        showToast(`"${file.name}" is not valid JSON.`, 'error', 4000);
+        return;
+      }
+      const str = JSON.stringify(parsed);
+      await sendMessage('updateImage', { id: modalImage.id, configJson: str });
+      setSelectedImage((prev) => (prev && prev.id === modalImage.id ? { ...prev, configJson: str } : prev));
+      setFullImageDetails((prev) => (prev && prev.id === modalImage.id ? { ...prev, configJson: str } : prev));
+      const hasView = Boolean(parsed && (parsed.position || parsed.rotation || parsed.cameraRadius || parsed.scene || parsed.controls));
+      showToast(
+        hasView
+          ? 'Scene config replaced. Close + reopen the modal to see it.'
+          : 'Config saved, but it has no camera fields — viewer will use defaults.',
+        hasView ? 'success' : 'warning',
+        4000
+      );
+    } catch (e) {
+      showToast(`Config replace failed: ${e.message || e}`, 'error', 4000);
+    } finally {
+      setReplacingSceneConfig(false);
+      if (configReplaceInputRef.current) configReplaceInputRef.current.value = '';
+    }
+  };
+
   const renderModalActions = (
     <>
       <button
@@ -3611,6 +3656,32 @@ export default function GalleryPage() {
 
   const renderModalOverviewFooter = (
     <div className="pt-4 border-t border-base-300">
+      {isSelectedScene && modalImage?.id && (
+        <div className="mb-4 rounded-[var(--radius-box)] border border-cyan-500/25 bg-cyan-500/10 p-3 text-sm text-base-content">
+          <div className="mb-2 flex items-center gap-2 font-semibold">
+            <Box className="h-4 w-4 text-cyan-500" />
+            Viewer config {modalConfigHasView ? '(camera fields present)' : '(NO camera fields — defaults used)'}
+          </div>
+          <p className="mb-3 text-xs text-base-content/70">
+            Swap the viewer framing without re-uploading the splat. Close + reopen the modal after replacing.
+          </p>
+          <input
+            ref={configReplaceInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) replaceSceneConfig(f); }}
+          />
+          <Button
+            className={inlineActionClass}
+            onClick={() => configReplaceInputRef.current?.click()}
+            disabled={replacingSceneConfig}
+          >
+            <Box className="h-3.5 w-3.5" />
+            {replacingSceneConfig ? 'Saving...' : 'Replace config (.json)'}
+          </Button>
+        </div>
+      )}
       {isSelectedVideo && retryableVideoServices.length > 0 && (
         <div className="mb-4 rounded-[var(--radius-box)] border border-warning/20 bg-warning/10 p-3 text-sm text-base-content">
           <div className="mb-2 flex items-center gap-2 font-semibold">
