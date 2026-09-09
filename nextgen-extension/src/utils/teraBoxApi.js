@@ -7,6 +7,8 @@
  *              the browser session via chrome.cookies.
  */
 
+import { getVideoProviderLinks } from './videoProviderLinks.js';
+
 const TERABOX_API_BASE = 'https://dm.terabox.com';
 // Only the dm homepage moved to a captcha gate (breaks jsToken scraping), so
 // the token is scraped from www while all /api/* calls stay on dm (which is
@@ -361,8 +363,13 @@ export async function listAllTeraBoxFiles(explicitCookie) {
  * Extract a TeraBox file id from an item's stored terabox links.
  */
 export function extractTeraBoxFileId(item = {}) {
-  const links = item?.videoHosts?.terabox || {};
-  const raw = String(links.fileId || links.fs_id || item.teraboxFileId || '');
+  let links = item?.videoHosts?.terabox || {};
+  try {
+    const merged = getVideoProviderLinks(item || {})?.terabox || {};
+    links = { ...merged, ...links };
+  } catch (_) {}
+  const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
+  const raw = String(links.fileId || links.fs_id || extraLinks.fileId || extraLinks.fs_id || item.teraboxFileId || '');
   return raw.trim();
 }
 
@@ -478,13 +485,19 @@ export async function checkTeraBoxIntegrity(items, cookie) {
 
   for (const item of items) {
     if (!item) continue;
-    const links = item?.videoHosts?.terabox || {};
+    let links = item?.videoHosts?.terabox || {};
+    try {
+      const merged = getVideoProviderLinks(item || {})?.terabox || {};
+      links = { ...merged, ...links };
+    } catch (_) {}
+    const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
     const hasLink = Boolean(
       links.watchUrl || links.directUrl || links.url ||
+      extraLinks.watchUrl || extraLinks.directUrl || extraLinks.url ||
       item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl
     );
     const fileId = extractTeraBoxFileId(item);
-    const fileName = String(links.filename || item.teraboxFileName || item.fileName || '').trim();
+    const fileName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
 
     if (!hasLink && !fileId) {
       noUrl.push({ item });
@@ -510,6 +523,108 @@ export async function checkTeraBoxIntegrity(items, cookie) {
     for (const file of files) {
       if (file.fs_id && dbIds.has(file.fs_id)) continue;
       if (file.server_filename && dbNames.has(file.server_filename)) continue;
+      extra.push({ file });
+    }
+  }
+
+  return { found, missing, noUrl, extra };
+}
+
+/**
+ * TeraBox 3D scene integrity check — symmetric to UDrop checkSceneIntegrity.
+ * Scenes are .spz files; video files must never show as scene orphans.
+ * @param {Array} items – scene DB items (filtered)
+ * @param {Array} allItems – every DB item; their terabox ids/names are excluded
+ *                           from the extra list so videos don't show as scene orphans
+ * @param {string} cookie
+ * @returns {Promise<{found:[],missing:[],noUrl:[],extra:[]}>}
+ */
+export async function checkTeraBoxSceneIntegrity(items, allItems, cookie) {
+  const found = [];
+  const missing = [];
+  const noUrl = [];
+  const extra = [];
+
+  let files = [];
+  let listingSucceeded = false;
+  try {
+    files = await listAllTeraBoxFiles(cookie);
+    listingSucceeded = true;
+    console.log(`[teraBoxApi] Scene check: listed ${files.length} TeraBox files.`);
+  } catch (err) {
+    console.warn('[teraBoxApi] scene listing failed:', err.message);
+  }
+
+  const fileMap = new Map();
+  for (const f of files) {
+    if (f.fs_id) fileMap.set(String(f.fs_id), f);
+    if (f.server_filename) fileMap.set(String(f.server_filename), f);
+  }
+
+  // Ids/names referenced by ANY item (videos included) never count as scene orphans
+  const referencedIds = new Set();
+  const referencedNames = new Set();
+  for (const item of allItems || []) {
+    if (!item) continue;
+    const fid = extractTeraBoxFileId(item);
+    if (fid) referencedIds.add(String(fid));
+    let mergedLinks = {};
+    try {
+      mergedLinks = getVideoProviderLinks(item || {})?.terabox || {};
+    } catch (_) {}
+    const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
+    const nm = String(mergedLinks.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
+    if (nm) referencedNames.add(nm);
+  }
+
+  const dbIds = new Set();
+  const dbNames = new Set();
+
+  for (const item of items || []) {
+    if (!item) continue;
+    let links = item?.videoHosts?.terabox || {};
+    try {
+      const merged = getVideoProviderLinks(item || {})?.terabox || {};
+      links = { ...merged, ...links };
+    } catch (_) {}
+    const extraLinks = item?.extraMetadata?.videoHosts?.terabox || {};
+    const hasLink = Boolean(
+      links.watchUrl || links.directUrl || links.url ||
+      extraLinks.watchUrl || extraLinks.directUrl || extraLinks.url ||
+      item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl ||
+      item.spzUrl
+    );
+    const fileId = extractTeraBoxFileId(item);
+    const fileName = String(links.filename || extraLinks.filename || item.teraboxFileName || item.fileName || '').trim();
+
+    if (!hasLink && !fileId && !fileName) {
+      noUrl.push({ item });
+      continue;
+    }
+
+    let matchedFile = null;
+    if (listingSucceeded) {
+      matchedFile = (fileId && fileMap.get(String(fileId))) || (fileName && fileMap.get(fileName)) || null;
+    }
+
+    if (fileId) dbIds.add(String(fileId));
+    if (fileName) dbNames.add(fileName);
+
+    if (matchedFile) {
+      found.push({ item, matchedFile });
+    } else if (!listingSucceeded) {
+      found.push({ item, matchedFile: null });
+    } else {
+      missing.push({ item });
+    }
+  }
+
+  if (listingSucceeded) {
+    for (const file of files) {
+      const name = String(file.server_filename || file.name || '');
+      if (!name.toLowerCase().endsWith('.spz')) continue;
+      const fid = String(file.fs_id || '');
+      if ((fid && (dbIds.has(fid) || referencedIds.has(fid))) || (name && (dbNames.has(name) || referencedNames.has(name)))) continue;
       extra.push({ file });
     }
   }

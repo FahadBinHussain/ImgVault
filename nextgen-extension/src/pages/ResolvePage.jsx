@@ -42,6 +42,7 @@ import {
 } from '../utils/filemoonApi';
 import {
   checkTeraBoxIntegrity,
+  checkTeraBoxSceneIntegrity,
 } from '../utils/teraBoxApi';
 import { retryVideoHostPageSide } from '../utils/videoRetryPageSide';
 import { getVideoSourceHostOptions } from '../utils/videoProviderLinks';
@@ -632,7 +633,7 @@ export default function ResolvePage() {
         return item.kind === 'scene' || Boolean(item.spzUrl) || String(item.fileName||'').toLowerCase().endsWith('.spz') || String(item.fileType||'').toLowerCase().startsWith('model/');
       });
       const isUdropScene = (item) => Boolean((item.spzUrl && String(item.spzUrl).includes('udrop.com')) || item.udropWatchUrl || item.udropDirectUrl || item.udropUrl) || Boolean(item.extraMetadata?.udropLinks?.length) || Boolean(item.videoHosts?.udrop) || Boolean(item.extraMetadata?.videoHosts?.udrop);
-      const isTeraboxScene = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.videoHosts?.terabox || item.extraMetadata?.videoHosts?.terabox);
+      const isTeraboxScene = (item) => Boolean(item.teraboxWatchUrl || item.teraboxDirectUrl || item.teraboxUrl || item.teraboxFileId || item.videoHosts?.terabox?.watchUrl || item.videoHosts?.terabox?.directUrl || item.videoHosts?.terabox?.url || item.videoHosts?.terabox?.fileId || item.videoHosts?.terabox?.filename || item.extraMetadata?.videoHosts?.terabox);
       const filteredScenes = tab === 'terabox' ? sceneItems.filter(isTeraboxScene) : sceneItems.filter(isUdropScene);
       let result = { found: [], missing: [], noUrl: [], extra: [] };
       if (tab === 'udrop') {
@@ -640,7 +641,7 @@ export default function ResolvePage() {
         const auth = await authorizeUdrop(settings.udropKey1, settings.udropKey2);
         result = await checkSceneIntegrity(filteredScenes.length ? filteredScenes : sceneItems.filter(isUdropScene), allItems, auth.access_token, auth.account_id);
       } else {
-        result = await checkTeraBoxIntegrity(filteredScenes.length ? filteredScenes : sceneItems.filter(isTeraboxScene), settings.teraboxCookie);
+        result = await checkTeraBoxSceneIntegrity(sceneItems.filter(isTeraboxScene), allItems, settings.teraboxCookie);
       }
       setSceneIntegrity(result);
       setNotice({
