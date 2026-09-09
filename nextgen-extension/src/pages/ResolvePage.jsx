@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -137,6 +137,7 @@ export default function ResolvePage() {
   const [sceneFilter, setSceneFilter] = useState('all');
   const [sceneKeysConfigured, setSceneKeysConfigured] = useState(false);
   const [sceneSubTab, setSceneSubTab] = useState('udrop'); // 'udrop' | 'terabox'
+  const sceneCheckSeqRef = useRef(0); // latest scene check wins; stale runs discard
 
   // ---- Filemoon integrity check state ----
   const [filemoonIntegrity, setFilemoonIntegrity] = useState({ found: [], missing: [], noUrl: [], extra: [] });
@@ -619,7 +620,9 @@ export default function ResolvePage() {
   const runSceneIntegrityCheck = useCallback(async (overrideTab) => {
     const tab = overrideTab === 'udrop' || overrideTab === 'terabox' ? overrideTab : sceneSubTab;
     if (tab !== sceneSubTab) setSceneSubTab(tab);
+    const seq = ++sceneCheckSeqRef.current;
     if (!checkSceneKeysConfigured()) {
+      if (seq !== sceneCheckSeqRef.current) return;
       setSceneError('No 3D host configured. Add UDrop keys or log into TeraBox.');
       return;
     }
@@ -644,15 +647,17 @@ export default function ResolvePage() {
       } else {
         result = await checkTeraBoxSceneIntegrity(sceneItems.filter(isTeraboxScene), allItems, settings.teraboxCookie);
       }
+      if (seq !== sceneCheckSeqRef.current) return;
       setSceneIntegrity(result);
       setNotice({
         type: result.missing.length > 0 ? 'error' : 'success',
         message: `${tab === 'udrop' ? 'UDrop' : 'TeraBox'} 3D check: ${result.found.length} found, ${result.missing.length} broken, ${result.noUrl.length} no url, ${result.extra.length} extra.`,
       });
     } catch (err) {
+      if (seq !== sceneCheckSeqRef.current) return;
       setSceneError(err.message || String(err));
     } finally {
-      setSceneLoading(false);
+      if (seq === sceneCheckSeqRef.current) setSceneLoading(false);
     }
   }, [settings, sendMessage, checkSceneKeysConfigured, sceneSubTab]);
 
