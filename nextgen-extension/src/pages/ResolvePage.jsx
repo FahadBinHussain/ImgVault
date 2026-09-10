@@ -138,6 +138,7 @@ export default function ResolvePage() {
   const [sceneError, setSceneError] = useState(null);
   const [sceneFilter, setSceneFilter] = useState('all');
   const [sceneKeysConfigured, setSceneKeysConfigured] = useState(false);
+  const [default3DSource] = useChromeStorage('default3DSource', 'udrop', 'sync');
   const [sceneSubTab, setSceneSubTab] = useState('udrop'); // 'udrop' | 'terabox'
   const [sceneLoadingMessage, setSceneLoadingMessage] = useState(null);
   // Empty results are valid (no scenes yet) — this flag, not result emptiness,
@@ -781,6 +782,12 @@ export default function ResolvePage() {
       runSceneIntegrityCheck();
     }
   }, [activeTab, sceneLoading, sceneHasChecked, runSceneIntegrityCheck]);
+
+  useEffect(() => {
+    if (activeTab === 'scenes' && default3DSource && sceneSubTab !== default3DSource && !sceneHasChecked) {
+      setSceneSubTab(default3DSource === 'terabox' ? 'terabox' : 'udrop');
+    }
+  }, [activeTab, default3DSource]);
 
   useEffect(() => {
     if (activeTab === 'scenes') {

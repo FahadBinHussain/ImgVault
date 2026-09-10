@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Save, Check, Download, Key, Image, Film, HardDrive,
+  Save, Check, Download, Key, Image, Film, HardDrive, Box,
   Cloud, Database, FolderOpen, Settings2, Sparkles,
   ExternalLink, Loader2, Shield, Zap, CheckCircle2, AlertCircle,
   Eye, EyeOff, Clipboard, ClipboardPaste, Trash2
@@ -11,6 +11,7 @@ import { useChromeStorage } from '../hooks/useChromeExtension';
 import GalleryNavbar from '../components/GalleryNavbar';
 import {
   IMAGE_SOURCE_OPTIONS,
+  THREE_D_SOURCE_OPTIONS,
   VIDEO_SOURCE_OPTIONS,
 } from '../config/providerCatalog';
 
@@ -251,11 +252,12 @@ export default function SettingsPage() {
   const [neonDatabaseUrl, setNeonDatabaseUrl] = useChromeStorage('neonDatabaseUrl', '', 'sync');
   const [defaultGallerySource, setDefaultGallerySource] = useChromeStorage('defaultGallerySource', 'imgbb', 'sync');
   const [defaultVideoSource, setDefaultVideoSource] = useChromeStorage('defaultVideoSource', 'filemoon', 'sync');
+  const [default3DSource, setDefault3DSource] = useChromeStorage('default3DSource', 'udrop', 'sync');
   const [downloadFolder, setDownloadFolder] = useChromeStorage('downloadFolder', '', 'sync');
 
   const [f, setF] = useState({
     pixvid: '', imgbb: '', filemoon: '', udrop1: '', udrop2: '', terabox: '',
-    firebase: '', neon: '', gallerySrc: 'imgbb', videoSrc: 'filemoon', dlFolder: '',
+    firebase: '', neon: '', gallerySrc: 'imgbb', videoSrc: 'filemoon', threeDSrc: 'udrop', dlFolder: '',
   });
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -273,9 +275,9 @@ export default function SettingsPage() {
       udrop1: udropKey1 || '', udrop2: udropKey2 || '', terabox: teraboxCookie || '',
       firebase: firebaseConfigRaw || '',
       neon: neonDatabaseUrl || '', gallerySrc: defaultGallerySource || 'imgbb',
-      videoSrc: defaultVideoSource || 'filemoon', dlFolder: downloadFolder || '',
+      videoSrc: defaultVideoSource || 'filemoon', threeDSrc: default3DSource || 'udrop', dlFolder: downloadFolder || '',
     });
-  }, [pixvidApiKey, imgbbApiKey, filemoonApiKey, udropKey1, udropKey2, teraboxCookie, firebaseConfigRaw, neonDatabaseUrl, defaultGallerySource, defaultVideoSource, downloadFolder]);
+  }, [pixvidApiKey, imgbbApiKey, filemoonApiKey, udropKey1, udropKey2, teraboxCookie, firebaseConfigRaw, neonDatabaseUrl, defaultGallerySource, defaultVideoSource, default3DSource, downloadFolder]);
 
   useEffect(() => {
     if ((downloadFolder || '').trim()) return;
@@ -313,6 +315,7 @@ export default function SettingsPage() {
           if (!f.terabox && cloud.teraboxCookie?.trim()) { set('terabox', cloud.teraboxCookie); setTeraboxCookie(cloud.teraboxCookie); up = true; }
           if (cloud.defaultGallerySource?.trim()) { set('gallerySrc', cloud.defaultGallerySource); setDefaultGallerySource(cloud.defaultGallerySource); up = true; }
           if (cloud.defaultVideoSource?.trim()) { set('videoSrc', cloud.defaultVideoSource); setDefaultVideoSource(cloud.defaultVideoSource); up = true; }
+          if (cloud.default3DSource?.trim()) { set('threeDSrc', cloud.default3DSource); setDefault3DSource(cloud.default3DSource); up = true; }
           setCloudStatus(up ? '✅ Synced from cloud' : '✓ Up to date');
         } else {
           setCloudStatus('No cloud settings found');
@@ -338,7 +341,7 @@ export default function SettingsPage() {
       await chrome.storage.sync.set({ neonDatabaseUrl: nUrl });
       setPixvidApiKey(f.pixvid); setImgbbApiKey(f.imgbb); setFilemoonApiKey(f.filemoon);
       setUdropKey1(f.udrop1); setUdropKey2(f.udrop2); setTeraboxCookie(f.terabox);
-      setDefaultGallerySource(f.gallerySrc); setDefaultVideoSource(f.videoSrc);
+      setDefaultGallerySource(f.gallerySrc); setDefaultVideoSource(f.videoSrc); setDefault3DSource(f.threeDSrc);
       setDownloadFolder(f.dlFolder); setNeonDatabaseUrl(nUrl);
       try {
         const fc = await new Promise(r => chrome.storage.sync.get(['firebaseConfig'], r)).then(r => r.firebaseConfig);
@@ -355,6 +358,7 @@ export default function SettingsPage() {
           if (f.terabox) s.teraboxCookie = f.terabox;
           if (f.gallerySrc) s.defaultGallerySource = f.gallerySrc;
           if (f.videoSrc) s.defaultVideoSource = f.videoSrc;
+          if (f.threeDSrc) s.default3DSource = f.threeDSrc;
           if (Object.keys(s).length) { await sm.saveUserSettings(s); setCloudStatus('✅ Synced to cloud'); }
           else setCloudStatus('Nothing to sync');
         }
@@ -530,6 +534,15 @@ export default function SettingsPage() {
             <Field label="Default Video Source" icon={Film}>
               <select className="s-sel" value={f.videoSrc} onChange={e => set('videoSrc', e.target.value)}>
                 {VIDEO_SOURCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Default 3D Source" icon={Box} hint="Which host the 3D viewer and Resolve 3D tab prefer when a scene is on both UDrop and TeraBox.">
+              <select className="s-sel" value={f.threeDSrc} onChange={e => set('threeDSrc', e.target.value)}>
+                {THREE_D_SOURCE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>

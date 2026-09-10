@@ -167,6 +167,7 @@ export default function GalleryPage() {
   const sendMessage = useChromeMessage();
   const [defaultGallerySource] = useChromeStorage('defaultGallerySource', 'imgbb', 'sync');
   const [defaultVideoSource] = useChromeStorage('defaultVideoSource', 'filemoon', 'sync');
+  const [default3DSource] = useChromeStorage('default3DSource', 'udrop', 'sync');
   const [firebaseConfig] = useChromeStorage('firebaseConfig', null, 'sync');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('newest');
@@ -4572,7 +4573,7 @@ export default function GalleryPage() {
                           </div>
                           <p className="mt-1 text-xs leading-5 text-base-content/60">{is3DMode ? 'Upload .glb/.gltf/.obj/.fbx/.stl etc to UDrop/TeraBox via direct XHR (no 64MiB limit).' : 'Switch on to upload 3D models (.glb, .obj, .fbx, .stl, .spz).'}</p>
                         </div>
-                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) setSelectedUploadHostKeys((prev) => { const f = prev.filter((k) => ['udrop','terabox'].includes(k)); return f.length ? f : ['udrop']; }); }} disabled={uploading} className="peer sr-only" />
+                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) setSelectedUploadHostKeys((prev) => { const f = prev.filter((k) => ['udrop','terabox'].includes(k)); return f.length ? f : [default3DSource === 'terabox' ? 'terabox' : 'udrop']; }); }} disabled={uploading} className="peer sr-only" />
                         <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}><span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} /></span>
                       </label>
                     </div>
@@ -4994,7 +4995,7 @@ export default function GalleryPage() {
                             {is3DMode ? 'Upload .glb/.gltf/.obj/.fbx/.stl etc to UDrop/TeraBox via direct XHR (no 64MiB limit).' : 'Switch on to upload 3D models (.glb, .obj, .fbx, .stl, .spz).'}
                           </p>
                         </div>
-                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) { setSelectedUploadHostKeys((prev) => { const filtered = prev.filter((k) => ['udrop','terabox'].includes(k)); return filtered.length ? filtered : ['udrop']; }); } }} disabled={uploading} className="peer sr-only" />
+                        <input type="checkbox" checked={is3DMode} onChange={(e) => { setIs3DMode(e.target.checked); if (e.target.checked) { setSelectedUploadHostKeys((prev) => { const filtered = prev.filter((k) => ['udrop','terabox'].includes(k)); return filtered.length ? filtered : [default3DSource === 'terabox' ? 'terabox' : 'udrop']; }); } }} disabled={uploading} className="peer sr-only" />
                         <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${is3DMode ? 'bg-cyan-500' : 'bg-base-300'}`}>
                           <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${is3DMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
                         </span>

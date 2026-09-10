@@ -5,6 +5,7 @@ const hasText = (value) => String(value || '').trim().length > 0
 
 export const DEFAULT_IMAGE_SOURCE = 'imgbb'
 export const DEFAULT_VIDEO_SOURCE = 'filemoon'
+export const DEFAULT_3D_SOURCE = 'udrop'
 export const DEFAULT_VAULT_BLOB_HOST = 'udrop'
 export const IMAGE_UPLOAD_SERVICES = [
   {
@@ -142,6 +143,15 @@ export const VIDEO_SOURCE_OPTIONS = VIDEO_UPLOAD_SERVICES.map(({ sourceValue, so
   if (b.value === DEFAULT_VIDEO_SOURCE) return 1
   return a.label.localeCompare(b.label)
 })
+
+export const THREE_D_SOURCE_OPTIONS = VIDEO_UPLOAD_SERVICES.filter(
+  (s) => s.key === 'udrop' || s.key === 'terabox'
+).map(({ sourceValue, sourceLabel }) => ({ value: sourceValue, label: sourceLabel }))
+  .sort((a, b) => {
+    if (a.value === DEFAULT_3D_SOURCE) return -1
+    if (b.value === DEFAULT_3D_SOURCE) return 1
+    return a.label.localeCompare(b.label)
+  })
 
 export function getConfiguredImageUploadServices(settings) {
   return IMAGE_UPLOAD_SERVICES.filter((service) => service.isConfigured(settings))
