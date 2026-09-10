@@ -36,6 +36,7 @@ import {
   checkUdropIntegrity,
   checkSceneIntegrity,
   deleteUdropFile,
+  extractUdropCode,
 } from '../utils/udropApi';
 import {
   checkFilemoonIntegrity,
@@ -737,14 +738,34 @@ export default function ResolvePage() {
             if (fresh && fresh !== url) candidates.push(fresh);
           } catch {}
         }
-        if (sourceHost === 'udrop' && fileId) {
-          try {
-            const svc = VIDEO_UPLOAD_SERVICES.find((s) => s.key === 'udrop');
-            if (svc?.vaultDownloadUrl) {
-              const fresh = await svc.vaultDownloadUrl({ url, fileId, settings: hostSettings });
-              if (fresh && fresh !== url) candidates.push(fresh);
-            }
-          } catch {}
+        if (sourceHost === 'udrop') {
+          const code = extractUdropCode(url) || (fileId && /^\d+$/.test(fileId) ? null : fileId);
+          // Try fileId-based fresh URL first
+          if (fileId) {
+            try {
+              const svc = VIDEO_UPLOAD_SERVICES.find((s) => s.key === 'udrop');
+              if (svc?.vaultDownloadUrl) {
+                const fresh = await svc.vaultDownloadUrl({ url, fileId, settings: hostSettings });
+                if (fresh && fresh !== url) candidates.push(fresh);
+              }
+            } catch {}
+          }
+          // Fallback: short_code via API (covers stale download_token URLs where fileId wasn't stored)
+          if (code) {
+            try {
+              const auth = await authorizeUdrop(hostSettings.udropKey1, hostSettings.udropKey2);
+              const fd = new FormData();
+              fd.append('access_token', auth.access_token);
+              fd.append('account_id', auth.account_id);
+              fd.append('short_url', code);
+              const r = await fetch('https://www.udrop.com/api/v2/file/download', { method: 'POST', body: fd });
+              if (r.ok) {
+                const j = await r.json();
+                const fresh = j?.data?.download_url;
+                if (fresh && fresh !== url) candidates.push(fresh);
+              }
+            } catch {}
+          }
         }
         let lastErr = null;
         for (const cand of candidates) {
