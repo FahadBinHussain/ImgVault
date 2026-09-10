@@ -44,9 +44,11 @@ import {
   checkTeraBoxIntegrity,
   checkTeraBoxSceneIntegrity,
   deleteTeraBoxFiles,
+  resolveTeraBoxPlaybackUrl,
 } from '../utils/teraBoxApi';
 import { retryVideoHostPageSide } from '../utils/videoRetryPageSide';
 import { getVideoSourceHostOptions } from '../utils/videoProviderLinks';
+import { UDropUploader, TeraBoxUploader } from '../utils/uploaders';
 
 const IMAGE_SETTING_KEYS = Array.from(
   new Set([
@@ -688,6 +690,162 @@ export default function ResolvePage() {
         delete next[item.id];
         return next;
       });
+    }
+  };
+
+  // Scene Fix (auto): download from the host where the scene lives and re-upload to the missing host — like video Fix (2.12.60)
+  const startSceneFix = async (item, targetHost) => {
+    try {
+      const [freshItem, hostSettings] = await Promise.all([
+        sendMessage('getImageById', { id: item.id }),
+        sendMessage('getVideoHostSettings'),
+      ]);
+      const service = VIDEO_UPLOAD_SERVICES.find((s) => s.key === targetHost);
+      const hostLabel = targetHost === 'terabox' ? 'TeraBox' : 'UDrop';
+      if (!service || !service.isConfigured(hostSettings)) {
+        setNotice({ type: 'error', message: `${hostLabel} is not configured. Go to Settings.` });
+        return;
+      }
+      const hasUdrop = Boolean(
+        (freshItem.spzUrl && String(freshItem.spzUrl).includes('udrop.com')) ||
+        freshItem.udropWatchUrl || freshItem.udropDirectUrl || freshItem.udropUrl ||
+        freshItem.extraMetadata?.udropLinks?.length ||
+        freshItem.videoHosts?.udrop || freshItem.extraMetadata?.videoHosts?.udrop ||
+        freshItem.extraMetadata?.sceneSpzFileId || freshItem.extraMetadata?.sceneFiles?.udrop
+      );
+      const hasTerabox = Boolean(
+        freshItem.teraboxWatchUrl || freshItem.teraboxDirectUrl || freshItem.teraboxUrl ||
+        freshItem.teraboxFileId || freshItem.videoHosts?.terabox || freshItem.extraMetadata?.videoHosts?.terabox ||
+        (freshItem.spzUrl && String(freshItem.spzUrl).includes('terabox.com')) ||
+        freshItem.extraMetadata?.sceneFiles?.terabox
+      );
+      let sourceHost = null;
+      if (targetHost === 'terabox' && hasUdrop) sourceHost = 'udrop';
+      else if (targetHost === 'udrop' && hasTerabox) sourceHost = 'terabox';
+      else if (hasUdrop) sourceHost = 'udrop';
+      else if (hasTerabox) sourceHost = 'terabox';
+      if (!sourceHost) {
+        setSceneFixFor({ item: freshItem, host: targetHost });
+        return;
+      }
+      const fetchBlob = async (url, fileId, fileName) => {
+        const candidates = [];
+        if (url && /^https?:\/\//i.test(url)) candidates.push(url);
+        if (sourceHost === 'terabox' && fileId) {
+          try {
+            const fresh = await resolveTeraBoxPlaybackUrl(hostSettings?.teraboxCookie || '', fileId, fileName || '');
+            if (fresh && fresh !== url) candidates.push(fresh);
+          } catch {}
+        }
+        if (sourceHost === 'udrop' && fileId) {
+          try {
+            const svc = VIDEO_UPLOAD_SERVICES.find((s) => s.key === 'udrop');
+            if (svc?.vaultDownloadUrl) {
+              const fresh = await svc.vaultDownloadUrl({ url, fileId, settings: hostSettings });
+              if (fresh && fresh !== url) candidates.push(fresh);
+            }
+          } catch {}
+        }
+        let lastErr = null;
+        for (const cand of candidates) {
+          try {
+            const resp = await fetch(cand);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob = await resp.blob();
+            if (blob.size === 0) throw new Error('empty blob');
+            return blob;
+          } catch (e) { lastErr = e; }
+        }
+        throw lastErr || new Error('no url');
+      };
+      setSceneFixBusy(true);
+      setFixProgress((prev) => ({ ...prev, [freshItem.id]: { phase: 'download', message: `Downloading SPZ from ${sourceHost}...`, percent: null } }));
+      const spzFileId = String(freshItem.extraMetadata?.sceneSpzFileId || freshItem.extraMetadata?.sceneFiles?.[sourceHost]?.spz?.fileId || freshItem.teraboxFileId || '').trim();
+      const texFileId = String(freshItem.extraMetadata?.sceneTextureFileId || freshItem.extraMetadata?.sceneFiles?.[sourceHost]?.texture?.fileId || freshItem.textureFileId || '').trim();
+      const spzFileName = String(freshItem.fileName || freshItem.spzUrl?.split('/').pop()?.split('?')[0] || 'scene.spz');
+      const texFileName = String(freshItem.textureUrl?.split('/').pop()?.split('?')[0] || 'texture.webp');
+      let spzBlob = null;
+      let texBlob = null;
+      try {
+        spzBlob = await fetchBlob(freshItem.spzUrl, spzFileId, spzFileName);
+      } catch (e) {
+        const alt = freshItem.udropWatchUrl || freshItem.teraboxWatchUrl || freshItem.udropDirectUrl || freshItem.teraboxDirectUrl;
+        if (alt && alt !== freshItem.spzUrl) {
+          try { spzBlob = await fetchBlob(alt, spzFileId, spzFileName); } catch {}
+        }
+      }
+      if (!spzBlob) throw new Error(`Could not download SPZ from ${sourceHost} — try manual upload.`);
+      if (freshItem.textureUrl) {
+        setFixProgress((prev) => ({ ...prev, [freshItem.id]: { phase: 'download', message: `Downloading texture from ${sourceHost}...`, percent: null } }));
+        try { texBlob = await fetchBlob(freshItem.textureUrl, texFileId, texFileName); } catch {}
+        if (!texBlob) {
+          setNotice({ type: 'warning', message: `SPZ downloaded, but texture missing — uploading SPZ only to ${hostLabel}.` });
+        }
+      }
+      const sceneConfig = (() => { try { return freshItem.configJson ? JSON.parse(freshItem.configJson) : null; } catch { return null; }})();
+      const onProgress = async ({ loaded, total, percent }) => {
+        const msg = percent !== null ? `${hostLabel} scene upload: ${percent}% (${loaded}/${total} bytes)` : `${hostLabel} scene upload: ${loaded} bytes`;
+        setFixProgress((prev) => ({ ...prev, [freshItem.id]: { phase: 'upload', message: msg, percent } }));
+      };
+      const spzRes = await service.uploadWithProgress({
+        uploader: new service.uploaderClass(),
+        blob: spzBlob,
+        settings: hostSettings,
+        data: { fileName: spzFileName },
+        onProgress,
+      });
+      let texRes = null;
+      if (texBlob) {
+        texRes = await service.uploadWithProgress({
+          uploader: new service.uploaderClass(),
+          blob: texBlob,
+          settings: hostSettings,
+          data: { fileName: texFileName },
+          onProgress,
+        });
+      }
+      const updates = {};
+      if (targetHost === 'udrop') {
+        updates.udropWatchUrl = spzRes.watchUrl || spzRes.url || '';
+        updates.udropDirectUrl = spzRes.directUrl || spzRes.url || '';
+      } else if (targetHost === 'terabox') {
+        updates.teraboxWatchUrl = spzRes.watchUrl || spzRes.url || '';
+        updates.teraboxDirectUrl = spzRes.directUrl || spzRes.url || '';
+      }
+      updates.spzUrl = spzRes.directUrl || spzRes.url || spzRes.watchUrl || freshItem.spzUrl;
+      updates.spzFileSize = spzBlob.size;
+      if (texRes) {
+        updates.textureUrl = texRes.directUrl || texRes.url || texRes.watchUrl || '';
+        updates.textureFileSize = texBlob.size;
+      }
+      if (sceneConfig) updates.configJson = JSON.stringify(sceneConfig);
+      const sceneFiles = {
+        ...(freshItem.extraMetadata?.sceneFiles || {}),
+        [targetHost]: {
+          spz: { fileId: spzRes.fileId || spzRes.filecode || '', filename: spzFileName },
+          ...(texRes ? { texture: { fileId: texRes.fileId || texRes.filecode || '', filename: texFileName } } : {}),
+        },
+      };
+      updates.extraMetadata = { ...(freshItem.extraMetadata || {}), sceneFiles };
+      await sendMessage('updateImage', { id: freshItem.id, ...updates });
+      await Promise.all([reloadImages({ silent: true }), reloadVaultImages()]);
+      await runSceneIntegrityCheck(targetHost);
+      setNotice({ type: 'success', message: `Scene fixed on ${hostLabel} for "${freshItem.pageTitle || freshItem.fileName || 'scene'}" — SPZ${texRes ? '+Image' : ''} copied from ${sourceHost}.` });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (/no source|Could not download/i.test(msg)) {
+        try {
+          const fresh = await sendMessage('getImageById', { id: item.id });
+          setSceneFixFor({ item: fresh || item, host: targetHost });
+          setNotice({ type: 'warning', message: `Auto Fix needs a hosted file to copy — ${msg} Pick local files.` });
+          return;
+        } catch {}
+      }
+      setNotice({ type: 'error', message: `Failed to fix: ${msg}` });
+    } finally {
+      setSceneFixBusy(false);
+      const fid = item?.id;
+      if (fid) setFixProgress((prev) => { const n = { ...prev }; delete n[fid]; return n; });
     }
   };
 
@@ -2984,11 +3142,11 @@ export default function ResolvePage() {
                             <Button
                               variant="primary"
                               className="h-9 justify-center gap-2 text-sm"
-                              disabled={sceneFixBusy}
-                              onClick={() => setSceneFixFor({ item, host: sceneSubTab })}
+                              disabled={sceneFixBusy || Boolean(fixProgress[item.id])}
+                              onClick={() => startSceneFix(item, sceneSubTab)}
                             >
-                              <UploadCloud className="h-4 w-4" />
-                              Fix
+                              {fixProgress[item.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                              {fixProgress[item.id] ? 'Fixing...' : 'Fix'}
                             </Button>
                           )}
                           {fixProgress[item.id] && (
